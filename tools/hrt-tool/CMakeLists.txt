@@ -37,8 +37,10 @@ add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
 add_library(hrtcpp STATIC
     src/api_stub.cpp
+    src/backup_envelope.cpp
     src/cli.cpp
     src/commands.cpp
+    src/encrypted_file.cpp
     src/entropy.cpp
     src/http.cpp
     src/log.cpp
@@ -126,4 +128,12 @@ if(BUILD_TESTING)
     target_compile_definitions(snapshot_test PRIVATE
         HRT_TOOL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
     add_test(NAME snapshot COMMAND snapshot_test)
+
+    add_executable(encrypted_file_test tests/encrypted_file_test.cpp)
+    target_link_libraries(encrypted_file_test PRIVATE hrtcpp)
+    add_test(NAME encrypted_file COMMAND encrypted_file_test)
+
+    add_executable(backup_envelope_test tests/backup_envelope_test.cpp)
+    target_link_libraries(backup_envelope_test PRIVATE hrtcpp)
+    add_test(NAME backup_envelope COMMAND backup_envelope_test)
 endif()
