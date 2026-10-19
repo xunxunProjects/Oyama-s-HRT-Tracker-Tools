@@ -1,6 +1,7 @@
 #include "commands.h"
 
 #include "api.h"
+#include "entropy.h"
 #include "error.h"
 #include "log.h"
 #include "paths.h"
@@ -9,6 +10,7 @@
 #include "version.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <set>
@@ -22,13 +24,6 @@ namespace {
 
 bool has_argument(const std::vector<std::string> &args, const std::string &value) {
     return std::find(args.begin(), args.end(), value) != args.end();
-}
-
-std::string strip_carriage_return(std::string value) {
-    if (!value.empty() && value.back() == '\r') {
-        value.pop_back();
-    }
-    return value;
 }
 
 VaultSession unlock_required(const GlobalOptions &options, std::istream &in,
@@ -48,10 +43,44 @@ int command_version(const ParsedArgs &parsed, std::ostream &out) {
     return 0;
 }
 
-int command_init(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+int command_init(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                 std::ostream &err) {
     const Paths paths = resolve_paths(parsed.options.config_dir);
     const bool reset = has_argument(parsed.command_args, "--reset");
+
+    if (reset && Vault::exists(paths.vault_file) && !parsed.options.yes) {
+        err << "Replace the existing vault? Type 'yes' to continue: ";
+        err.flush();
+        std::string answer;
+        if (!std::getline(in, answer)) {
+            throw ToolError(ExitCode::Usage, "RESET_ABORTED",
+                            "vault replacement cancelled");
+        }
+        if (!answer.empty() && answer.back() == '\r') {
+            answer.pop_back();
+        }
+        if (answer != "yes") {
+            throw ToolError(ExitCode::Usage, "RESET_ABORTED",
+                            "vault replacement cancelled");
+        }
+    }
+
     const std::string password = read_vault_password(parsed.options, in, out, true);
+    const EntropyEstimate estimate = estimate_entropy(password);
+    out << "master password: guess " << estimate.guess_bits << " bits, uniform "
+        << estimate.uniform_bits << " bits, " << estimate.code_points
+        << " code points, charset " << estimate.charset_size << "\n";
+    out << "classes:";
+    if (estimate.has_lower) out << " lower";
+    if (estimate.has_upper) out << " upper";
+    if (estimate.has_digits) out << " digits";
+    if (estimate.has_symbols) out << " symbols";
+    if (estimate.has_non_ascii) out << " non-ascii";
+    out << "\n";
+    if (parsed.options.debug) {
+        out << "debug: empirical Shannon " << empirical_shannon_bits(password) << " bits\n";
+    }
+
     VaultSession session = Vault::create(paths.vault_file, password, reset);
     (void)session;
     out << "vault created: " << paths.vault_file.string() << "\n";
@@ -75,8 +104,11 @@ int command_logs_show(const ParsedArgs &parsed, std::istream &in, std::ostream &
 }
 
 int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream &in,
-                 std::ostream &out) {
+                 std::ostream &out, std::ostream &err) {
     VaultSession session = unlock_required(parsed.options, in, out);
+    if (parsed.options.debug) {
+        err << "debug: " << name << " (M1 stub)\n";
+    }
     if (!parsed.options.log_file.empty() &&
         (parsed.options.debug || parsed.options.trace)) {
         EncryptedLog::append(parsed.options.log_file, session.log_key,
@@ -89,6 +121,7 @@ int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream
     http.trace = parsed.options.trace;
     http.timeout_s = parsed.options.timeout_s;
     http.insecure_tls = parsed.options.insecure_tls;
+    http.trace_out = &err;
     std::unique_ptr<ApiClient> client = make_api_client(parsed.options.server, http);
 
     if (name == "login") {
@@ -128,17 +161,19 @@ std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                             "vault password file must be mode 0600");
         }
 #endif
+        std::error_code size_error;
+        const auto size =
+            std::filesystem::file_size(options.vault_password_file, size_error);
+        if (!size_error && size > kMaxMasterPasswordBytes + 2) {
+            throw ToolLimitError("vault password file exceeds 256 bytes");
+        }
+
         std::ifstream file(options.vault_password_file);
         if (!file) {
             throw ToolError(ExitCode::Vault, "VAULT_PASSWORD_FILE",
                             "cannot read the vault password file");
         }
-        std::string password;
-        if (!std::getline(file, password)) {
-            throw ToolError(ExitCode::Vault, "VAULT_PASSWORD_FILE",
-                            "vault password file is empty");
-        }
-        password = strip_carriage_return(password);
+        const std::string password = read_password_line(file, kMaxMasterPasswordBytes);
         if (password.empty()) {
             throw ToolError(ExitCode::Vault, "VAULT_PASSWORD_FILE",
                             "vault password file is empty");
@@ -147,12 +182,7 @@ std::string read_vault_password(const GlobalOptions &options, std::istream &in,
     }
 
     if (options.vault_password_stdin) {
-        std::string password;
-        if (!std::getline(in, password)) {
-            throw ToolError(ExitCode::Vault, "VAULT_PASSWORD",
-                            "no vault password was provided on stdin");
-        }
-        password = strip_carriage_return(password);
+        const std::string password = read_password_line(in, kMaxMasterPasswordBytes);
         if (password.empty()) {
             throw ToolError(ExitCode::Vault, "VAULT_PASSWORD",
                             "vault password must not be empty");
@@ -175,7 +205,7 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         return command_version(parsed, out);
     }
     if (parsed.command == "init") {
-        return command_init(parsed, in, out);
+        return command_init(parsed, in, out, err);
     }
     if (parsed.command == "config") {
         if (!parsed.command_args.empty() && parsed.command_args.front() == "path") {
@@ -183,7 +213,7 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         }
         const std::string name =
             parsed.command_args.empty() ? "config" : "config " + parsed.command_args.front();
-        return command_stub(name, parsed, in, out);
+        return command_stub(name, parsed, in, out, err);
     }
     if (parsed.command == "logs") {
         if (!parsed.command_args.empty() && parsed.command_args.front() == "show") {
@@ -191,12 +221,12 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         }
         const std::string name =
             parsed.command_args.empty() ? "logs" : "logs " + parsed.command_args.front();
-        return command_stub(name, parsed, in, out);
+        return command_stub(name, parsed, in, out, err);
     }
 
     std::string name = parsed.command;
     if (!parsed.command_args.empty()) {
         name += " " + parsed.command_args.front();
     }
-    return command_stub(name, parsed, in, out);
+    return command_stub(name, parsed, in, out, err);
 }

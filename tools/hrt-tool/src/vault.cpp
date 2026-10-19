@@ -263,7 +263,42 @@ struct SealedVault {
     std::array<uint8_t, kKeyLen> key;
 };
 
-SealedVault seal(const VaultData &data, const std::string &password) {
+struct HeaderParams {
+    uint32_t iterations = kDefaultIterations;
+    std::array<uint8_t, kSaltLen> salt{};
+};
+
+HeaderParams read_header_params(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw ToolError(ExitCode::Vault, "VAULT_READ", "cannot read the vault header");
+    }
+    uint8_t header[kHeaderLen] = {};
+    in.read(reinterpret_cast<char *>(header), static_cast<std::streamsize>(kHeaderLen));
+    if (in.gcount() != static_cast<std::streamsize>(kHeaderLen)) {
+        throw VaultCorruptError("vault header is truncated");
+    }
+    if (std::memcmp(header, "HRTV", 4) != 0) {
+        throw VaultCorruptError("vault magic is not HRTV");
+    }
+    if (get_u16(header + 4) != kVaultVersion || get_u16(header + 6) != kKdfPbkdf2Sha256) {
+        throw VaultCorruptError("unsupported vault header");
+    }
+
+    HeaderParams params;
+    params.iterations = get_u32(header + 8);
+    if (params.iterations < kMinIterations || params.iterations > kMaxIterations) {
+        throw VaultCorruptError("vault KDF iteration count is out of range");
+    }
+    if (get_u16(header + 12) != kSaltLen) {
+        throw VaultCorruptError("vault salt length is invalid");
+    }
+    std::memcpy(params.salt.data(), header + 14, kSaltLen);
+    return params;
+}
+
+SealedVault seal(const VaultData &data, const std::string &password,
+                 const HeaderParams *reuse_salt = nullptr) {
     const std::string plaintext = to_json(data).dump();
     if (plaintext.size() > kMaxPlaintextBytes) {
         throw ToolError(ExitCode::Data, "VAULT_TOO_LARGE",
@@ -271,21 +306,28 @@ SealedVault seal(const VaultData &data, const std::string &password) {
     }
 
     std::array<uint8_t, kSaltLen> salt{};
-    std::array<uint8_t, kNonceLen> nonce{};
+    uint32_t iterations = kDefaultIterations;
     hrtcore_error error{};
-    if (hrtcore_random_bytes(salt.data(), salt.size(), &error) != HRTCORE_OK ||
-        hrtcore_random_bytes(nonce.data(), nonce.size(), &error) != HRTCORE_OK) {
+    if (reuse_salt != nullptr) {
+        salt = reuse_salt->salt;
+        iterations = reuse_salt->iterations;
+    } else if (hrtcore_random_bytes(salt.data(), salt.size(), &error) != HRTCORE_OK) {
+        throw ToolError(ExitCode::Vault, "VAULT_CRYPTO", error.message);
+    }
+
+    std::array<uint8_t, kNonceLen> nonce{};
+    if (hrtcore_random_bytes(nonce.data(), nonce.size(), &error) != HRTCORE_OK) {
         throw ToolError(ExitCode::Vault, "VAULT_CRYPTO", error.message);
     }
 
     const std::array<uint8_t, kKeyLen> key =
-        derive_key(password, salt.data(), salt.size(), kDefaultIterations);
+        derive_key(password, salt.data(), salt.size(), iterations);
 
     uint8_t header[kHeaderLen] = {};
     std::memcpy(header, "HRTV", 4);
     put_u16(header + 4, kVaultVersion);
     put_u16(header + 6, kKdfPbkdf2Sha256);
-    put_u32(header + 8, kDefaultIterations);
+    put_u32(header + 8, iterations);
     put_u16(header + 12, static_cast<uint16_t>(kSaltLen));
     std::memcpy(header + 14, salt.data(), kSaltLen);
     put_u16(header + 30, static_cast<uint16_t>(kNonceLen));
@@ -360,12 +402,20 @@ bool Vault::exists(const std::filesystem::path &path) {
 
 VaultSession Vault::create(const std::filesystem::path &path, const std::string &password,
                            bool overwrite) {
+    if (password.size() > kMaxMasterPasswordBytes) {
+        throw ToolLimitError("master password exceeds 256 bytes");
+    }
     const EntropyEstimate estimate = estimate_entropy(password);
     if (!meets_master_password_floor(estimate)) {
         std::ostringstream message;
-        message << "master password is too weak: guess " << estimate.guess_bits
-                << " bits, uniform " << estimate.uniform_bits
-                << " bits; at least 40 of each is required";
+        message << "master password is too weak: ";
+        if (estimate.weak_structure) {
+            message << estimate.structure_reason << " (guess " << estimate.guess_bits
+                    << " bits, uniform " << estimate.uniform_bits << " bits)";
+        } else {
+            message << "guess " << estimate.guess_bits << " bits, uniform "
+                    << estimate.uniform_bits << " bits; at least 40 of each is required";
+        }
         throw VaultWeakPasswordError(message.str(), estimate.guess_bits, estimate.uniform_bits);
     }
     if (!overwrite && exists(path)) {
@@ -451,6 +501,9 @@ VaultSession Vault::unlock(const std::filesystem::path &path, const std::string 
 
 void Vault::save(const std::filesystem::path &path, const VaultData &data,
                  const std::string &password) {
+    if (password.size() > kMaxMasterPasswordBytes) {
+        throw ToolLimitError("master password exceeds 256 bytes");
+    }
     if (exists(path)) {
         // Verify the password before replacing an existing vault.
         VaultSession verified = unlock(path, password);
@@ -460,6 +513,16 @@ void Vault::save(const std::filesystem::path &path, const VaultData &data,
 
     VaultData updated = data;
     updated.updated_at = now_seconds();
+
+    if (exists(path)) {
+        VaultSession verified = unlock(path, password);
+        (void)verified;
+        const HeaderParams params = read_header_params(path);
+        SealedVault sealed = seal(updated, password, &params);
+        write_atomic(path, sealed.bytes);
+        return;
+    }
+
     SealedVault sealed = seal(updated, password);
     write_atomic(path, sealed.bytes);
 }

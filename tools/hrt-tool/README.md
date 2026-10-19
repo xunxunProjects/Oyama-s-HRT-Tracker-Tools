@@ -13,8 +13,9 @@ PK model, and the data commands. Every server/data command exits `6` with
 
 ## Build
 
-Dependencies: C11, C++17, CMake >= 3.16, OpenSSL, libcurl, nlohmann/json, and a
-Rust toolchain (stable).
+Dependencies: C11, C++17, CMake >= 3.16, OpenSSL >= 3.0, libcurl,
+nlohmann/json, and a Rust toolchain (stable). OpenSSL 3 is required for
+`EVP_MAC`, `OSSL_PARAM`, and the HKDF controls.
 
 Debian/Ubuntu:
 
@@ -104,8 +105,9 @@ The log key is `HKDF-SHA256(vault_key, "hrt-tool-log-v1", 32)`.
 
 ## Encrypted logs
 
-`--debug`/`--trace` write to stderr by default. With `--log-file FILE`, each
-record is:
+`--debug`/`--trace` are parsed; in M1 `--debug` prints a short stub line to
+stderr. Transport and TLS diagnostics require the live client and land in M4.
+With `--log-file FILE`, each record is:
 
 ```text
 u32 payload_len | u64 timestamp_ms | 12-byte nonce | AES-256-GCM ciphertext+tag
@@ -135,6 +137,15 @@ decrypts the records to stdout. Plaintext logs are never written.
 - Trust pins the SPKI SHA-256, not the leaf certificate, so certificate
   renewals do not break the client. M1 implements the trust-store state
   machine; live pin enforcement lands with the real client in M4.
+- Automatic redirects currently follow libcurl's default; the M4 live client
+  will replace them with a re-validated redirect loop and cap response
+  headers alongside the body. The M1 `ApiClient` stub opens no socket, so the
+  transport path is not reachable yet.
+- `logs show` requires `--log-file FILE` in M1; a default log location in the
+  encrypted vault is M4 work.
+- Windows relies on NTFS ACLs rather than Unix mode bits; the Windows build
+  and ACL verification are M4 work, and the Windows vault write is not yet
+  crash-durable (`fsync` is POSIX-only here).
 - Tor/I2P are reached through `--proxy socks5h://127.0.0.1:9050` (Tor) or
   `socks5h://127.0.0.1:4447` (I2P). `socks5h` keeps DNS at the proxy.
 - OpSec is the user's responsibility: data can be correlated with the account,

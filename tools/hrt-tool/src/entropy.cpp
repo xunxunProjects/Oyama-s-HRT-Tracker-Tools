@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <set>
@@ -479,10 +480,90 @@ std::string strip_trailing_symbols(const std::string &text) {
     return text.substr(0, end);
 }
 
+struct KeyPosition {
+    double x;
+    double y;
+};
+
+std::optional<KeyPosition> key_position(char32_t cp) {
+    static const char *const rows[] = {"1234567890", "qwertyuiop", "asdfghjkl",
+                                       "zxcvbnm"};
+    const char32_t lower = ascii_lower_cp(cp);
+    if (lower >= 128) {
+        return std::nullopt;
+    }
+    const char target = static_cast<char>(lower);
+    for (int row = 0; row < 4; ++row) {
+        const char *found = std::strchr(rows[row], target);
+        if (found != nullptr) {
+            return KeyPosition{static_cast<double>(found - rows[row]) + row * 0.25,
+                               static_cast<double>(row)};
+        }
+    }
+    return std::nullopt;
+}
+
+bool is_keyboard_neighbor(char32_t a, char32_t b) {
+    const std::optional<KeyPosition> left = key_position(a);
+    const std::optional<KeyPosition> right = key_position(b);
+    if (!left.has_value() || !right.has_value()) {
+        return false;
+    }
+    const double dx = std::abs(left->x - right->x);
+    const double dy = std::abs(left->y - right->y);
+    return (dy == 0.0 && dx == 1.0) || (dy == 1.0 && dx <= 1.0);
+}
+
+size_t longest_same_run(const std::vector<char32_t> &chars) {
+    size_t best = 0;
+    size_t current = 1;
+    for (size_t i = 1; i < chars.size(); ++i) {
+        if (chars[i] == chars[i - 1]) {
+            ++current;
+            best = std::max(best, current);
+        } else {
+            current = 1;
+        }
+    }
+    return best;
+}
+
+bool is_repeated_block(const std::vector<char32_t> &chars) {
+    if (chars.size() < 4) {
+        return false;
+    }
+    for (size_t block = 1; block <= chars.size() / 2; ++block) {
+        bool repeats = true;
+        for (size_t i = block; i < chars.size(); ++i) {
+            if (chars[i] != chars[i % block]) {
+                repeats = false;
+                break;
+            }
+        }
+        if (repeats) {
+            return true;
+        }
+    }
+    return false;
+}
+
+double keyboard_adjacency_ratio(const std::vector<char32_t> &chars) {
+    if (chars.size() < 8) {
+        return 0.0;
+    }
+    size_t adjacent = 0;
+    for (size_t i = 1; i < chars.size(); ++i) {
+        if (chars[i] == chars[i - 1] || is_keyboard_neighbor(chars[i - 1], chars[i])) {
+            ++adjacent;
+        }
+    }
+    return static_cast<double>(adjacent) / static_cast<double>(chars.size() - 1);
+}
+
 } // namespace
 
 EntropyEstimate estimate_entropy(const std::string &password) {
-    EntropyEstimate estimate{0.0, 0.0, 0, 0};
+    EntropyEstimate estimate;
     if (password.empty()) {
         return estimate;
     }
@@ -491,9 +572,25 @@ EntropyEstimate estimate_entropy(const std::string &password) {
     const Charset charset = analyze_charset(code_points);
     estimate.code_points = static_cast<int>(code_points.size());
     estimate.charset_size = charset_size(charset);
+    estimate.has_lower = charset.lower;
+    estimate.has_upper = charset.upper;
+    estimate.has_digits = charset.digits;
+    estimate.has_symbols = charset.symbols;
+    estimate.has_non_ascii = charset.non_ascii;
     if (estimate.charset_size >= 2) {
         estimate.uniform_bits =
             static_cast<double>(estimate.code_points) * std::log2(estimate.charset_size);
+    }
+
+    if (longest_same_run(code_points) >= 5) {
+        estimate.weak_structure = true;
+        estimate.structure_reason = "a character is repeated too many times";
+    } else if (is_repeated_block(code_points)) {
+        estimate.weak_structure = true;
+        estimate.structure_reason = "the password is a repeated block";
+    } else if (keyboard_adjacency_ratio(code_points) >= 0.7) {
+        estimate.weak_structure = true;
+        estimate.structure_reason = "the password follows a keyboard path";
     }
 
     const std::string lower = ascii_lower(password);
@@ -515,7 +612,8 @@ EntropyEstimate estimate_entropy(const std::string &password) {
 }
 
 bool meets_master_password_floor(const EntropyEstimate &estimate) {
-    return estimate.guess_bits >= kMasterPasswordFloorBits &&
+    return !estimate.weak_structure &&
+           estimate.guess_bits >= kMasterPasswordFloorBits &&
            estimate.uniform_bits >= kMasterPasswordFloorBits;
 }
 

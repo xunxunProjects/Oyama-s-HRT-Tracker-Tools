@@ -16,6 +16,12 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
+
 namespace {
 
 constexpr size_t kMaxResponseBytes = 16 * 1024 * 1024;
@@ -47,8 +53,14 @@ bool ends_with(const std::string &value, const std::string &suffix) {
 }
 
 bool is_loopback(const std::string &host) {
-    return host == "localhost" || host == "::1" || host == "127.0.0.1" ||
-           host.rfind("127.", 0) == 0;
+    if (host == "localhost" || host == "::1") {
+        return true;
+    }
+    in_addr address{};
+    if (::inet_pton(AF_INET, host.c_str(), &address) != 1) {
+        return false;
+    }
+    return (ntohl(address.s_addr) >> 24) == 127;
 }
 
 std::string hex_encode(const unsigned char *data, size_t len) {
@@ -370,6 +382,9 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "hrt-tool/0.1.0");
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, options.timeout_s);
+    // M4: replace automatic redirects with a re-validated loop that re-checks
+    // the URL policy and trust pin on every hop, and cap response headers
+    // alongside the body. M1's ApiClient stub never opens a socket.
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, options.insecure_tls ? 0L : 1L);

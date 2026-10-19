@@ -35,10 +35,13 @@ int main() {
 
     validate_server_url(parse_url("https://example.com"));
     validate_server_url(parse_url("http://127.0.0.1:8787"));
+    validate_server_url(parse_url("http://127.1.2.3:8787"));
     validate_server_url(parse_url("http://localhost:8787"));
     validate_server_url(parse_url("http://abc.onion"));
     validate_server_url(parse_url("http://abc.i2p"));
     CHECK_THROWS(validate_server_url(parse_url("http://example.com")), ToolError);
+    CHECK_THROWS(validate_server_url(parse_url("http://127.evil.com")), ToolError);
+    CHECK_THROWS(validate_server_url(parse_url("http://127.0.0.1.nip.io")), ToolError);
     CHECK_THROWS(validate_server_url(parse_url("ftp://example.com")), ToolError);
 
     validate_proxy_url("socks5h://127.0.0.1:9050");

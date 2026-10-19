@@ -115,6 +115,9 @@ int main() {
             kPasswordLine);
         CHECK_EQ(result.code, 0);
         CHECK(std::filesystem::exists(temp.path() / "vault.hrtv"));
+        CHECK(contains(result.out, "guess"));
+        CHECK(contains(result.out, "uniform"));
+        CHECK(contains(result.out, "classes:"));
     }
 
     {
@@ -123,6 +126,34 @@ int main() {
             {"init", "--config-dir", temp.path().string(), "--vault-password-stdin"},
             "aaaaaaaaaaaaaaaa\n");
         CHECK_EQ(result.code, 3);
+        CHECK(!std::filesystem::exists(temp.path() / "vault.hrtv"));
+    }
+
+    {
+        TempDir temp;
+        std::string long_password(300, 'a');
+        long_password.push_back('\n');
+        const RunResult result = run(
+            {"init", "--config-dir", temp.path().string(), "--vault-password-stdin"},
+            long_password);
+        CHECK_EQ(result.code, 5);
+        CHECK(!std::filesystem::exists(temp.path() / "vault.hrtv"));
+    }
+
+    {
+        TempDir temp;
+        const std::filesystem::path password_file = temp.path() / "long.txt";
+        {
+            std::ofstream out(password_file);
+            out << std::string(300, 'a') << "\n";
+        }
+#ifndef _WIN32
+        ::chmod(password_file.c_str(), 0600);
+#endif
+        const RunResult result =
+            run({"init", "--config-dir", temp.path().string(), "--vault-password-file",
+                 password_file.string()});
+        CHECK_EQ(result.code, 5);
         CHECK(!std::filesystem::exists(temp.path() / "vault.hrtv"));
     }
 
@@ -198,8 +229,15 @@ int main() {
             kPasswordLine);
         CHECK_EQ(again.code, 3);
 
-        const RunResult reset = run(
+        const RunResult refused = run(
             {"init", "--reset", "--config-dir", temp.path().string(),
+             "--vault-password-stdin"},
+            "no\n" + std::string(kPasswordLine));
+        CHECK_EQ(refused.code, 2);
+        CHECK(std::filesystem::exists(temp.path() / "vault.hrtv"));
+
+        const RunResult reset = run(
+            {"init", "--reset", "--yes", "--config-dir", temp.path().string(),
              "--vault-password-stdin"},
             kPasswordLine);
         CHECK_EQ(reset.code, 0);
@@ -218,6 +256,7 @@ int main() {
              "--debug", "--log-file", log_file.string()},
             kPasswordLine);
         CHECK_EQ(login.code, 6);
+        CHECK(contains(login.err, "debug: login"));
         CHECK(std::filesystem::exists(log_file));
 
         const std::string raw = read_text(log_file);

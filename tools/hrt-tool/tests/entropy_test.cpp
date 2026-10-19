@@ -16,6 +16,24 @@ int main() {
         CHECK(!meets_master_password_floor(estimate));
     }
 
+    const char *structural_weak[] = {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1!",
+        "1q2w3e4r5t6y7u8i9o0p",
+        "qazwsxedcrfvtgbyhnujmikolp",
+        "xxxxxxxxxxxxxxxxxxxxA1!",
+        "abcabcabcabcabc",
+        "123123123123123",
+    };
+    for (const char *candidate : structural_weak) {
+        const EntropyEstimate estimate = estimate_entropy(candidate);
+        if (meets_master_password_floor(estimate)) {
+            std::cerr << "expected structurally weak: " << candidate << " (guess "
+                      << estimate.guess_bits << ", uniform " << estimate.uniform_bits
+                      << ")\n";
+            ++g_failures;
+        }
+    }
+
     const EntropyEstimate passphrase = estimate_entropy("correct horse battery staple");
     CHECK(passphrase.guess_bits >= 40.0);
     CHECK(passphrase.uniform_bits >= 40.0);

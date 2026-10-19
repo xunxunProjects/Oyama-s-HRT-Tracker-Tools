@@ -1,4 +1,5 @@
 #include "error.h"
+#include "log.h"
 #include "paths.h"
 #include "test_framework.h"
 #include "vault.h"
@@ -149,6 +150,32 @@ int main() {
         VaultSession after_failed_save = Vault::unlock(vault_path, kPassword);
         CHECK(after_failed_save.data.token == "tok-abc");
 #endif
+    }
+
+    {
+        TempDir temp;
+        const std::filesystem::path vault_path = temp.path() / "vault.hrtv";
+        VaultSession session = Vault::create(vault_path, kPassword);
+        const std::array<uint8_t, 32> key_before = session.key;
+
+        const std::filesystem::path log_path = temp.path() / "log.bin";
+        EncryptedLog::append(log_path, session.log_key, "before save");
+
+        session.data.token = "after-save";
+        Vault::save(vault_path, session.data, kPassword);
+
+        VaultSession reloaded = Vault::unlock(vault_path, kPassword);
+        CHECK(reloaded.key == key_before);
+        CHECK(reloaded.data.token == "after-save");
+
+        std::ostringstream shown;
+        try {
+            EncryptedLog::show(log_path, reloaded.log_key, shown);
+            CHECK_EQ(shown.str(), std::string("before save\n"));
+        } catch (const ToolError &error) {
+            std::cerr << "log key changed across save: " << error.what() << "\n";
+            ++g_failures;
+        }
     }
 
     {
