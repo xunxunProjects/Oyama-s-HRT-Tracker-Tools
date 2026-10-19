@@ -58,4 +58,8 @@ if(BUILD_TESTING)
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)
+
+    add_executable(entropy_test tests/entropy_test.cpp src/entropy.cpp)
+    target_include_directories(entropy_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME entropy COMMAND entropy_test)
 endif()
