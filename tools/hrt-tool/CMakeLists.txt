@@ -42,6 +42,7 @@ add_library(hrtcpp STATIC
     src/entropy.cpp
     src/http.cpp
     src/log.cpp
+    src/model.cpp
     src/paths.cpp
     src/pk.cpp
     src/prompt.cpp
@@ -114,4 +115,8 @@ if(BUILD_TESTING)
     target_compile_definitions(pk_test PRIVATE
         HRT_TOOL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
     add_test(NAME pk COMMAND pk_test)
+
+    add_executable(model_test tests/model_test.cpp)
+    target_link_libraries(model_test PRIVATE hrtcpp)
+    add_test(NAME model COMMAND model_test)
 endif()
