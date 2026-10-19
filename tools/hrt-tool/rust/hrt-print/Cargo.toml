@@ -5,4 +5,7 @@ edition = "2021"
 
 [lib]
 name = "hrtprint"
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde_json = "1"

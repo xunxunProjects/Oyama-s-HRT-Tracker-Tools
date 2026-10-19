@@ -136,4 +136,9 @@ if(BUILD_TESTING)
     add_executable(backup_envelope_test tests/backup_envelope_test.cpp)
     target_link_libraries(backup_envelope_test PRIVATE hrtcpp)
     add_test(NAME backup_envelope COMMAND backup_envelope_test)
+
+    add_test(NAME rust_print
+        COMMAND ${CARGO_EXECUTABLE} test --offline
+                --manifest-path ${HRTPRINT_DIR}/Cargo.toml)
+    set_tests_properties(rust_print PROPERTIES WORKING_DIRECTORY ${HRTPRINT_DIR})
 endif()
