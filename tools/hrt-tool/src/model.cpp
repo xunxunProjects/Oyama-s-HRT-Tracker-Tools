@@ -1,8 +1,12 @@
 #include "model.h"
 
 #include "error.h"
+#include "hrtcore/hrtcore.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
@@ -331,6 +335,223 @@ std::string join_strings(const std::vector<std::string> &values, char separator)
     return out;
 }
 
+/* ------------------------------------------------------------------ */
+/* Import sanitizers (backupState.ts)                                 */
+/* ------------------------------------------------------------------ */
+
+constexpr size_t kMaxImportEntries = 20000;
+constexpr double kEventTimeMinH = 0.0;
+constexpr double kEventTimeMaxH = 1500000.0;
+constexpr double kImportDoseMaxMG = 10000.0;
+constexpr double kImportWeightMinKG = 20.0;
+constexpr double kImportWeightMaxKG = 400.0;
+
+std::string random_record_id() {
+    std::array<uint8_t, 16> bytes{};
+    hrtcore_error error{};
+    if (hrtcore_random_bytes(bytes.data(), bytes.size(), &error) != HRTCORE_OK) {
+        throw ToolError(ExitCode::Data, "IMPORT_ID", error.message);
+    }
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(32);
+    for (uint8_t byte : bytes) {
+        out.push_back(digits[byte >> 4]);
+        out.push_back(digits[byte & 0x0f]);
+    }
+    return out;
+}
+
+std::optional<double> coerce_number(const nlohmann::json &value) {
+    double number = 0.0;
+    if (value.is_number()) {
+        number = value.get<double>();
+    } else if (value.is_string()) {
+        const std::string text = value.get<std::string>();
+        char *end = nullptr;
+        number = std::strtod(text.c_str(), &end);
+        if (end == text.c_str() || *end != '\0') {
+            return std::nullopt;
+        }
+    } else {
+        return std::nullopt;
+    }
+    if (!std::isfinite(number)) {
+        return std::nullopt;
+    }
+    return number;
+}
+
+bool valid_route(const nlohmann::json &value) {
+    if (!value.is_string()) {
+        return false;
+    }
+    const std::string route = value.get<std::string>();
+    return route == "sublingual" || route == "injection" || route == "patchApply" ||
+           route == "patchRemove" || route == "gel" || route == "oral";
+}
+
+bool valid_ester_code(const nlohmann::json &value) {
+    if (!value.is_string()) {
+        return false;
+    }
+    const std::string code = value.get<std::string>();
+    if (code.empty() || code.size() > 24) {
+        return false;
+    }
+    for (unsigned char c : code) {
+        if (!std::isalnum(c) && c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string sanitized_id(const nlohmann::json &record) {
+    if (record.contains("id") && record.at("id").is_string()) {
+        const std::string id = record.at("id").get<std::string>();
+        if (!id.empty() && !is_protected_id(id)) {
+            return id;
+        }
+    }
+    return random_record_id();
+}
+
+void carry_stamp(nlohmann::json &out, const nlohmann::json &record) {
+    if (!record.contains("updatedAt")) {
+        return;
+    }
+    const auto stamp = coerce_number(record.at("updatedAt"));
+    if (stamp.has_value() && *stamp > 0.0) {
+        out["updatedAt"] = *stamp;
+    }
+}
+
+std::optional<nlohmann::json> sanitize_event(const nlohmann::json &record) {
+    if (!record.is_object() || !valid_route(record.value("route", nlohmann::json()))) {
+        return std::nullopt;
+    }
+    const auto time = coerce_number(record.value("timeH", nlohmann::json()));
+    if (!time.has_value() || *time < kEventTimeMinH || *time > kEventTimeMaxH) {
+        return std::nullopt;
+    }
+    double dose = 0.0;
+    const auto dose_number = coerce_number(record.value("doseMG", nlohmann::json()));
+    if (dose_number.has_value()) {
+        dose = std::min(kImportDoseMaxMG, std::max(0.0, *dose_number));
+    }
+
+    nlohmann::json out = nlohmann::json::object();
+    out["id"] = sanitized_id(record);
+    out["route"] = record.at("route");
+    out["ester"] = valid_ester_code(record.value("ester", nlohmann::json()))
+                       ? record.at("ester")
+                       : nlohmann::json("E2");
+    out["doseMG"] = dose;
+    out["timeH"] = *time;
+    out["extras"] = record.contains("extras") && record.at("extras").is_object()
+                        ? record.at("extras")
+                        : nlohmann::json::object();
+    carry_stamp(out, record);
+    return out;
+}
+
+std::optional<nlohmann::json> sanitize_lab(const nlohmann::json &record) {
+    if (!record.is_object()) {
+        return std::nullopt;
+    }
+    const auto time = coerce_number(record.value("timeH", nlohmann::json()));
+    const auto value = coerce_number(record.value("concValue", nlohmann::json()));
+    if (!time.has_value() || !value.has_value()) {
+        return std::nullopt;
+    }
+    std::string unit = "pmol/l";
+    if (record.contains("unit") && record.at("unit").is_string()) {
+        const std::string candidate = record.at("unit").get<std::string>();
+        if (candidate == "pg/ml" || candidate == "pmol/l" || candidate == "ng/dl" ||
+            candidate == "nmol/l") {
+            unit = candidate;
+        }
+    }
+
+    nlohmann::json out = nlohmann::json::object();
+    out["id"] = sanitized_id(record);
+    out["timeH"] = *time;
+    out["concValue"] = *value;
+    out["unit"] = unit;
+    if (record.contains("assay") && record.at("assay").is_string()) {
+        const std::string assay = record.at("assay").get<std::string>();
+        if (assay == "lcms" || assay == "immuno") {
+            out["assay"] = assay;
+        }
+    }
+    carry_stamp(out, record);
+    return out;
+}
+
+std::optional<nlohmann::json> sanitize_template(const nlohmann::json &record) {
+    if (!record.is_object() || !valid_route(record.value("route", nlohmann::json())) ||
+        !valid_ester_code(record.value("ester", nlohmann::json()))) {
+        return std::nullopt;
+    }
+    const auto dose = coerce_number(record.value("doseMG", nlohmann::json()));
+    if (!dose.has_value() || *dose < 0.0) {
+        return std::nullopt;
+    }
+    nlohmann::json out = nlohmann::json::object();
+    out["id"] = sanitized_id(record);
+    out["name"] = record.contains("name") && record.at("name").is_string()
+                      ? record.at("name")
+                      : nlohmann::json("Template");
+    out["route"] = record.at("route");
+    out["ester"] = record.at("ester");
+    out["doseMG"] = *dose;
+    out["extras"] = record.contains("extras") && record.at("extras").is_object()
+                        ? record.at("extras")
+                        : nlohmann::json::object();
+    const auto created = coerce_number(record.value("createdAt", nlohmann::json()));
+    out["createdAt"] = created.has_value() && *created > 0.0
+                           ? nlohmann::json(*created)
+                           : nlohmann::json(static_cast<double>(
+                                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count()));
+    carry_stamp(out, record);
+    return out;
+}
+
+nlohmann::json sanitize_records(RecordKind kind, const nlohmann::json &records,
+                                ImportSanitizeReport *report) {
+    if (!records.is_array()) {
+        return nlohmann::json::array();
+    }
+    if (records.size() > kMaxImportEntries) {
+        throw ToolLimitError("import has too many records");
+    }
+    nlohmann::json out = nlohmann::json::array();
+    for (const nlohmann::json &record : records) {
+        std::optional<nlohmann::json> sanitized;
+        if (kind == RecordKind::Events) {
+            sanitized = sanitize_event(record);
+        } else if (kind == RecordKind::LabResults) {
+            sanitized = sanitize_lab(record);
+        } else {
+            sanitized = sanitize_template(record);
+        }
+        if (!sanitized.has_value()) {
+            if (report != nullptr) {
+                ++report->dropped;
+            }
+            continue;
+        }
+        if (report != nullptr && *sanitized != record) {
+            ++report->coerced;
+        }
+        out.push_back(std::move(*sanitized));
+    }
+    return out;
+}
+
 } // namespace
 
 const char *mode_key_name(ModeKey mode) {
@@ -551,8 +772,45 @@ nlohmann::json normalize_sync_payload(const nlohmann::json &payload) {
     return to_sync_payload(normalize_sync_state(payload), payload);
 }
 
+nlohmann::json sanitize_import_payload(const nlohmann::json &payload,
+                                       ImportSanitizeReport *report) {
+    nlohmann::json out = normalize_sync_payload(payload);
+    for (ModeKey mode : {ModeKey::Transfem, ModeKey::Transmasc}) {
+        const char *mode_name = mode_key_name(mode);
+        if (!out.contains("modes") || !out.at("modes").is_object() ||
+            !out.at("modes").contains(mode_name) ||
+            !out.at("modes").at(mode_name).is_object()) {
+            continue;
+        }
+        nlohmann::json &block = out["modes"][mode_name];
+        for (RecordKind kind : {RecordKind::Events, RecordKind::LabResults,
+                                RecordKind::DoseTemplates}) {
+            const char *key = record_kind_name(kind);
+            block[key] = sanitize_records(kind, block.value(key, nlohmann::json::array()),
+                                          report);
+        }
+    }
+
+    if (out.contains("weight")) {
+        const auto weight = coerce_number(out.at("weight"));
+        if (out.at("weight").is_number() && weight.has_value() && *weight > 0.0) {
+            const double clamped = std::min(
+                kImportWeightMaxKG, std::max(kImportWeightMinKG, *weight));
+            if (report != nullptr && clamped != *weight) {
+                ++report->coerced;
+            }
+            out["weight"] = clamped;
+        } else {
+            out.erase("weight");
+            out.erase("weightUpdatedAt");
+        }
+    }
+    return out;
+}
+
 MergeResult merge_sync_payloads(const nlohmann::json &local,
-                                const nlohmann::json &remote) {
+                                const nlohmann::json &remote,
+                                const MergeOptions &options) {
     MergeResult result;
     const SyncState local_state = normalize_sync_state(local);
     const SyncState remote_state = normalize_sync_state(remote);
@@ -568,9 +826,19 @@ MergeResult merge_sync_payloads(const nlohmann::json &local,
             const std::vector<nlohmann::json> &remote_records =
                 remote_state.mode(mode).for_kind(kind);
 
-            merged.mode(mode).deletions.for_kind(kind) =
-                merge_tombstone_maps(local_state.mode(mode).deletions.for_kind(kind),
-                                     remote_state.mode(mode).deletions.for_kind(kind));
+            std::map<std::string, int64_t> &deletions =
+                merged.mode(mode).deletions.for_kind(kind);
+            deletions = merge_tombstone_maps(
+                local_state.mode(mode).deletions.for_kind(kind),
+                remote_state.mode(mode).deletions.for_kind(kind));
+            if (options.explicit_import) {
+                for (const nlohmann::json &record : remote_records) {
+                    const auto id = record_id(record);
+                    if (id.has_value()) {
+                        deletions.erase(*id);
+                    }
+                }
+            }
 
             if (has_duplicate_ids(local_records) || has_duplicate_ids(remote_records)) {
                 result.aborted = true;

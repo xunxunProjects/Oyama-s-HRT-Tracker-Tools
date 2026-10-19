@@ -38,6 +38,11 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      # CMake builds the printer with `cargo build --offline`; a clean runner
+      # has an empty registry, so fetch the locked dependencies first.
+      - name: Fetch Rust dependencies
+        run: cargo fetch --locked --manifest-path tools/hrt-tool/rust/hrt-print/Cargo.toml
+
       - name: Configure
         run: cmake -S tools/hrt-tool -B tools/hrt-tool/build -DCMAKE_BUILD_TYPE=Release
 

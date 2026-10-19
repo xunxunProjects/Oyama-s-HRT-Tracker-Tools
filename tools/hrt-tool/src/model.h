@@ -63,12 +63,36 @@ struct MergeResult {
     bool remote_stale = false;
 };
 
+struct ImportSanitizeReport {
+    int dropped = 0;
+    int coerced = 0;
+};
+
+/*
+ * Applies the website's import sanitizers (backupState.ts): unknown routes
+ * and out-of-range event times are dropped, doses are clamped to
+ * [0, 10000] mg, invalid esters default to E2, invalid lab units default to
+ * pmol/l, weights are clamped to [20, 400] kg, and missing ids get one.
+ */
+nlohmann::json sanitize_import_payload(const nlohmann::json &payload,
+                                       ImportSanitizeReport *report);
+
+struct MergeOptions {
+    /*
+     * An explicit `import` is the user asking for these records back, so a
+     * tombstone on the local side does not block an imported record. Cloud
+     * sync (the default) keeps tombstone-wins.
+     */
+    bool explicit_import = false;
+};
+
 SyncState normalize_sync_state(const nlohmann::json &payload);
 nlohmann::json to_sync_payload(const SyncState &state, const nlohmann::json &base);
 nlohmann::json normalize_sync_payload(const nlohmann::json &payload);
 
 MergeResult merge_sync_payloads(const nlohmann::json &local,
-                                const nlohmann::json &remote);
+                                const nlohmann::json &remote,
+                                const MergeOptions &options = MergeOptions{});
 
 nlohmann::json &mode_block(nlohmann::json &payload, ModeKey mode);
 void write_tombstone(nlohmann::json &payload, ModeKey mode, RecordKind kind,

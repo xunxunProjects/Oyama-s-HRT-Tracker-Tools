@@ -7,7 +7,7 @@ different language, build, CI job, and release artifact.
 **Status: M2 local data.** Implemented: the encrypted local vault, the
 master-password entropy gate, encrypted debug logs, the CLI surface, URL/proxy
 policy, the SPKI trust-store state machine, the libcurl transport, a typed
-`ApiClient` stub, the C PK engine (27 reference scenarios), cloud-snapshot
+`ApiClient` stub, the C PK engine (31 reference scenarios), cloud-snapshot
 decryption, sync-payload merge/tombstones, encrypted `HRTE` exports, the
 complete-backup envelope, the Rust printer, and the local `look`/`add`/`dose`/
 `lab`/`weight`/`export`/`import` commands. Still stubbed: the live
@@ -101,10 +101,28 @@ hrt-tool import --in backup.hrte --vault-password-file vault.txt \
 The account password unlocks the cloud snapshot; the vault master password
 encrypts `HRTE` export files. `import --replace` needs `--yes` (or a typed
 `yes`) and replaces the whole snapshot; the default is the website's merge
-rules with tombstones.
+rules with tombstones. An explicit import is the user asking for records back,
+so it clears the matching local tombstones; records missing from the import
+are not deleted.
+
+Imports are sanitised the way the website sanitises them: unknown routes and
+out-of-range event times are dropped (and counted in the output), doses are
+clamped to `0..10000 mg`, weights to `20..400 kg`, invalid lab units default
+to `pmol/l`, and records without an id get one. Payloads larger than 16 MiB
+or with more than 20,000 records per array are refused. Naked v1 event arrays
+are accepted alongside v1 flat objects and v2 `modes` payloads.
+
+Mutating local commands take an advisory lock on `<snapshot>.lock` and hold it
+across read-modify-write, so concurrent `add`/`import` processes cannot lose
+an update. `look` and `export` do not need the lock and work in a read-only
+directory. Exports refuse to overwrite an existing path.
 
 The `look` numbers are the uncalibrated baseline: the website's EKF/OU/MIPD
 calibration is not ported yet, and `look` prints a warning saying so.
+
+`--time` accepts `now`, `+2h`/`-30m`, `2026y10m19d`, and ISO 8601 with an
+optional `Z` or `+HH:MM`/`-HH:MM` offset; an explicit offset names the instant
+it denotes regardless of `--utc`. Trailing junk is rejected.
 
 Global flags (accepted before or after the command):
 
@@ -163,6 +181,9 @@ decrypts the records to stdout. Plaintext logs are never written.
 - Plaintext is written only to stdout. `export --out FILE` writes an encrypted
   `HRTE` container; plaintext is available only with `--out -`. `import`
   accepts encrypted `HRTE` or plaintext input.
+- `export --out FILE` refuses to replace an existing file, and all local reads
+  are capped at 16 MiB after a regular-file check, so a FIFO or a growing file
+  cannot exhaust memory.
 - Login sends the account password to the server, exactly as the website does.
   The cloud key is derived from that password and the user id, so a
   compromised worker or request log can derive the key. The "server cannot read
@@ -216,9 +237,12 @@ are not part of this build and are not modified by it.
 `testdata/pk-vectors.json` is generated from the website's `logic.ts` with
 vitest. To regenerate it, copy a generator test into the website repository's
 `tests/` directory, run it with `TZ=UTC` and the website's `vitest`, and merge
-the result. The C engine is validated against all 27 scenarios (injection,
+the result. The C engine is validated against all 31 scenarios (injection,
 oral, sublingual, gel, patch, CPA, T, multi-dose, weight, custom params) at
-`1e-7` relative tolerance, plus the grid endpoints and AUC.
+`1e-7` relative tolerance, plus the grid endpoints and AUC. The patch cases
+include three overlapping patches with distinct release rates, same-time
+applies, the newest-group fallback, and planned/overwear removals, so the
+pairing order and the open-list removal semantics are pinned to `logic.ts`.
 
 ## Roadmap
 

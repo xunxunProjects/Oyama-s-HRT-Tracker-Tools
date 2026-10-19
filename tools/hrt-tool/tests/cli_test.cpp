@@ -204,7 +204,10 @@ int main() {
             CHECK_EQ(result.code, 2);
             CHECK(contains(result.err, "--snapshot") ||
                   contains(result.err, "missing --out") ||
-                  contains(result.err, "missing --in"));
+                  contains(result.err, "missing --in") ||
+                  contains(result.err, "dose needs") ||
+                  contains(result.err, "lab needs") ||
+                  contains(result.err, "weight needs"));
         }
 
         const std::filesystem::path password_file = temp.path() / "password.txt";

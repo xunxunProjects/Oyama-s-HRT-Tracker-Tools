@@ -3,6 +3,7 @@
 #include "commands.h"
 #include "error.h"
 
+#include <nlohmann/json.hpp>
 #include <string>
 
 namespace {
@@ -206,6 +207,9 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
     } catch (const ToolError &error) {
         err << "hrt-tool: " << error.what() << " [" << error.code() << "]\n";
         return static_cast<int>(error.exit_code());
+    } catch (const nlohmann::json::exception &error) {
+        err << "hrt-tool: malformed data: " << error.what() << " [DATA]\n";
+        return static_cast<int>(ExitCode::Data);
     } catch (const std::exception &error) {
         err << "hrt-tool: " << error.what() << "\n";
         return 1;

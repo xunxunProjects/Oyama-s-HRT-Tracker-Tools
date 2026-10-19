@@ -1,6 +1,7 @@
 #include "encrypted_file.h"
 
 #include "entropy.h"
+#include "file_io.h"
 #include "hrtcore/hrtcore.h"
 
 #include <algorithm>
@@ -92,7 +93,8 @@ void check_permissions(const std::filesystem::path &path) {
 #endif
 }
 
-void write_atomic(const std::filesystem::path &path, const std::vector<uint8_t> &bytes) {
+void write_atomic(const std::filesystem::path &path, const std::vector<uint8_t> &bytes,
+                  bool replace_existing) {
     const std::filesystem::path dir =
         path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
     std::error_code error;
@@ -118,6 +120,12 @@ void write_atomic(const std::filesystem::path &path, const std::vector<uint8_t> 
             throw ToolError(ExitCode::Vault, "EXPORT_WRITE",
                             "cannot write the temporary export");
         }
+    }
+    if (!replace_existing && std::filesystem::exists(path, error)) {
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw ToolError(ExitCode::Vault, "EXPORT_EXISTS",
+                        "refusing to overwrite an existing export: " + path.string());
     }
     std::filesystem::rename(temp, path, error);
     if (error) {
@@ -156,8 +164,24 @@ void write_atomic(const std::filesystem::path &path, const std::vector<uint8_t> 
     if (::close(fd) != 0 && failure.empty()) {
         failure = std::string(std::strerror(errno));
     }
-    if (failure.empty() && ::rename(temp.c_str(), path.c_str()) != 0) {
-        failure = std::string(std::strerror(errno));
+    if (failure.empty() && replace_existing) {
+        if (::rename(temp.c_str(), path.c_str()) != 0) {
+            failure = std::string(std::strerror(errno));
+        }
+    } else if (failure.empty()) {
+        /* link(2) publishes atomically and fails with EEXIST instead of
+           replacing a file the user already has. */
+        if (::link(temp.c_str(), path.c_str()) != 0) {
+            if (errno == EEXIST) {
+                ::unlink(temp.c_str());
+                throw ToolError(ExitCode::Vault, "EXPORT_EXISTS",
+                                "refusing to overwrite an existing export: " +
+                                    path.string());
+            }
+            failure = std::string(std::strerror(errno));
+        } else {
+            ::unlink(temp.c_str());
+        }
     }
     if (!failure.empty()) {
         ::unlink(temp.c_str());
@@ -220,7 +244,7 @@ void seal_encrypted_file(const std::filesystem::path &path, const std::string &m
         throw ToolError(ExitCode::Vault, "EXPORT_CRYPTO",
                         "unexpected export ciphertext length");
     }
-    write_atomic(path, bytes);
+    write_atomic(path, bytes, false);
 }
 
 std::string open_encrypted_file(const std::filesystem::path &path,
@@ -231,21 +255,8 @@ std::string open_encrypted_file(const std::filesystem::path &path,
     check_password(password);
     check_permissions(path);
 
-    std::error_code size_error;
-    const auto size = std::filesystem::file_size(path, size_error);
-    if (size_error) {
-        throw ToolError(ExitCode::Vault, "EXPORT_READ",
-                        "cannot read the export: " + size_error.message());
-    }
-    if (size > kMaxFileBytes) {
-        throw ToolLimitError("export exceeds the 16 MiB limit");
-    }
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw ToolError(ExitCode::Vault, "EXPORT_READ", "cannot open the export");
-    }
-    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(input),
-                                     std::istreambuf_iterator<char>()};
+    const std::vector<uint8_t> bytes =
+        read_binary_file_capped(path, kMaxFileBytes, "export");
     if (bytes.size() < kHeaderLen) {
         throw ExportCorruptError("export header is truncated");
     }

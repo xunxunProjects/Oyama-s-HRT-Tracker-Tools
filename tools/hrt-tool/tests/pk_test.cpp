@@ -114,5 +114,44 @@ int main() {
     }
 
     CHECK_EQ(scenarios_run, vectors.at("vectors").size());
+
+    // The C ABI rejects non-finite and out-of-range inputs instead of
+    // producing NaN concentrations or absurd doses.
+    {
+        const hrtcore_pk_params params = default_pk_params();
+        PkEvent event;
+        event.id = "bounds";
+        event.route = HRTCORE_ROUTE_ORAL;
+        event.ester = HRTCORE_ESTER_E2;
+        event.dose_mg = 2.0;
+        event.time_h = 479800.0;
+
+        const double nan = std::nan("");
+        CHECK_THROWS(run_pk({event}, nan, params, 480000.0), ToolError);
+        CHECK_THROWS(run_pk({event}, 10.0, params, 480000.0), ToolError);
+        CHECK_THROWS(run_pk({event}, 401.0, params, 480000.0), ToolError);
+
+        PkEvent bad_dose = event;
+        bad_dose.dose_mg = nan;
+        CHECK_THROWS(run_pk({bad_dose}, 70.0, params, 480000.0), ToolError);
+        bad_dose.dose_mg = -1.0;
+        CHECK_THROWS(run_pk({bad_dose}, 70.0, params, 480000.0), ToolError);
+        bad_dose.dose_mg = 10001.0;
+        CHECK_THROWS(run_pk({bad_dose}, 70.0, params, 480000.0), ToolError);
+
+        PkEvent bad_time = event;
+        bad_time.time_h = nan;
+        CHECK_THROWS(run_pk({bad_time}, 70.0, params, 480000.0), ToolError);
+        bad_time.time_h = -1.0;
+        CHECK_THROWS(run_pk({bad_time}, 70.0, params, 480000.0), ToolError);
+        bad_time.time_h = 1.6e6;
+        CHECK_THROWS(run_pk({bad_time}, 70.0, params, 480000.0), ToolError);
+
+        PkEvent bad_extra = event;
+        bad_extra.extras_present = 1u << HRTCORE_EXTRA_PATCH_WEAR_H;
+        bad_extra.extras[HRTCORE_EXTRA_PATCH_WEAR_H] = nan;
+        CHECK_THROWS(run_pk({bad_extra}, 70.0, params, 480000.0), ToolError);
+    }
+
     return test_result();
 }

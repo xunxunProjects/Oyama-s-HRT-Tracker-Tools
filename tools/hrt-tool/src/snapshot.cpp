@@ -1,6 +1,7 @@
 #include "snapshot.h"
 
 #include "entropy.h"
+#include "file_io.h"
 #include "hrtcore/hrtcore.h"
 
 #include <algorithm>
@@ -8,7 +9,6 @@
 #include <cerrno>
 #include <cstring>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -163,20 +163,15 @@ bool is_cloud_bundle(const nlohmann::json &value) {
 }
 
 bool snapshot_is_encrypted(const std::filesystem::path &path) {
-    std::error_code size_error;
-    const auto size = std::filesystem::file_size(path, size_error);
-    if (size_error || size > kMaxSnapshotBytes) {
+    try {
+        const std::string text =
+            read_text_file_capped(path, kMaxSnapshotBytes, "snapshot");
+        const nlohmann::json parsed =
+            nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
+        return !parsed.is_discarded() && is_cloud_bundle(parsed);
+    } catch (const ToolError &) {
         return false;
     }
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        return false;
-    }
-    const std::string text((std::istreambuf_iterator<char>(input)),
-                           std::istreambuf_iterator<char>());
-    const nlohmann::json parsed =
-        nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
-    return !parsed.is_discarded() && is_cloud_bundle(parsed);
 }
 
 nlohmann::json decrypt_cloud_bundle(const nlohmann::json &bundle,
@@ -248,24 +243,9 @@ nlohmann::json encrypt_cloud_bundle(const nlohmann::json &payload,
 nlohmann::json load_snapshot(const std::filesystem::path &path,
                              const std::string &account_password,
                              const std::string &user_id) {
-    std::error_code size_error;
-    const auto size = std::filesystem::file_size(path, size_error);
-    if (size_error) {
-        throw ToolError(ExitCode::Vault, "SNAPSHOT_READ",
-                        "cannot read the snapshot: " + size_error.message());
-    }
-    if (size > kMaxSnapshotBytes) {
-        throw ToolLimitError("snapshot exceeds the 16 MiB limit");
-    }
-
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw ToolError(ExitCode::Vault, "SNAPSHOT_READ", "cannot open the snapshot");
-    }
-    const std::string text((std::istreambuf_iterator<char>(input)),
-                           std::istreambuf_iterator<char>());
+    const std::string text = read_text_file_capped(path, kMaxSnapshotBytes, "snapshot");
     nlohmann::json parsed = nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
-    if (parsed.is_discarded() || !parsed.is_object()) {
+    if (parsed.is_discarded() || (!parsed.is_object() && !parsed.is_array())) {
         throw SnapshotCorruptError("snapshot is not valid JSON");
     }
     if (!is_cloud_bundle(parsed)) {
@@ -283,5 +263,9 @@ void save_snapshot(const std::filesystem::path &path, const nlohmann::json &payl
                    const std::string &account_password, const std::string &user_id) {
     const std::array<uint8_t, kKeyLen> key = derive_cloud_key(account_password, user_id);
     const nlohmann::json bundle = encrypt_cloud_bundle(payload, key);
-    write_atomic(path, bundle.dump());
+    const std::string text = bundle.dump();
+    if (text.size() > kMaxSnapshotBytes) {
+        throw ToolLimitError("snapshot exceeds the 16 MiB limit");
+    }
+    write_atomic(path, text);
 }

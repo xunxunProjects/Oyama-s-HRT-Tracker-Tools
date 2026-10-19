@@ -642,13 +642,39 @@ static void patch_removal_times(const hrtcore_dose_event *events, size_t count,
         }
         if (match != SIZE_MAX) {
             removal_times[open[match]] = removal_time;
-            open[match] = open[open_len - 1];
+            /* Order-preserving removal, like Array.prototype.splice. */
+            memmove(&open[match], &open[match + 1],
+                    (open_len - match - 1) * sizeof(size_t));
             --open_len;
             continue;
         }
 
-        for (size_t idx = next; idx > 0; --idx) {
-            const size_t apply = applies[idx - 1];
+        /*
+         * No patch fits by its plan. An explicit removal still ends a patch
+         * worn past its planned wear, so it goes to the newest patch of that
+         * hormone put on before it, if that one is unpaired and within the
+         * overwear window. An older patch is never taken: a newer one
+         * replaced it. Patches put on at the same moment are tried in the
+         * order the plan match uses.
+         */
+        size_t last = next;
+        while (last > 0 &&
+               (hormone >= 0 &&
+                patch_hormone(events[applies[last - 1]].ester) != hormone)) {
+            --last;
+        }
+        if (last == 0) {
+            continue;
+        }
+        const size_t last_index = last - 1;
+        size_t first = last_index;
+        while (first > 0 &&
+               events[applies[first - 1]].time_h ==
+                   events[applies[last_index]].time_h) {
+            --first;
+        }
+        for (size_t i = first; i <= last_index; ++i) {
+            const size_t apply = applies[i];
             if (hormone >= 0 && patch_hormone(events[apply].ester) != hormone) {
                 continue;
             }
@@ -832,6 +858,35 @@ int hrtcore_pk_run(const hrtcore_dose_event *events, size_t count, double weight
     if (count > 100000) {
         set_error(err, HRTCORE_ERR_LIMIT, "too many dose events");
         return HRTCORE_ERR_LIMIT;
+    }
+    /* The documented input bounds; reject rather than propagate NaN or
+       absurd concentrations into the result. */
+    if (!isfinite(weight_kg) || weight_kg < 20.0 || weight_kg > 400.0) {
+        set_error(err, HRTCORE_ERR_INVALID_ARG,
+                  "body weight must be between 20 and 400 kg");
+        return HRTCORE_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!isfinite(events[i].time_h) || events[i].time_h < 0.0 ||
+            events[i].time_h > 1500000.0) {
+            set_error(err, HRTCORE_ERR_INVALID_ARG,
+                      "dose time is outside 0..1500000 hours");
+            return HRTCORE_ERR_INVALID_ARG;
+        }
+        if (!isfinite(events[i].dose_mg) || events[i].dose_mg < 0.0 ||
+            events[i].dose_mg > 10000.0) {
+            set_error(err, HRTCORE_ERR_INVALID_ARG,
+                      "dose amount is outside 0..10000 mg");
+            return HRTCORE_ERR_INVALID_ARG;
+        }
+        for (size_t j = 0; j < HRTCORE_EXTRA_COUNT; ++j) {
+            if ((events[i].extras_present & (1u << j)) != 0u &&
+                !isfinite(events[i].extras[j])) {
+                set_error(err, HRTCORE_ERR_INVALID_ARG,
+                          "dose extra is not finite");
+                return HRTCORE_ERR_INVALID_ARG;
+            }
+        }
     }
 
     size_t *indices = malloc(count * sizeof(size_t));
