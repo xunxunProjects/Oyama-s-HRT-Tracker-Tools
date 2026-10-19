@@ -49,6 +49,7 @@ add_dependencies(hrt-tool hrtprint_build)
 
 add_library(hrtcpp STATIC
     src/entropy.cpp
+    src/log.cpp
     src/paths.cpp
     src/vault.cpp
 )
@@ -74,4 +75,8 @@ if(BUILD_TESTING)
     add_executable(vault_test tests/vault_test.cpp)
     target_link_libraries(vault_test PRIVATE hrtcpp)
     add_test(NAME vault COMMAND vault_test)
+
+    add_executable(log_test tests/log_test.cpp)
+    target_link_libraries(log_test PRIVATE hrtcpp)
+    add_test(NAME log COMMAND log_test)
 endif()

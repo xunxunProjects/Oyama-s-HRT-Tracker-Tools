@@ -52,3 +52,9 @@ public:
     explicit VaultCorruptError(const std::string &message)
         : ToolError(ExitCode::Data, "VAULT_CORRUPT", message) {}
 };
+
+class ToolLimitError : public ToolError {
+public:
+    explicit ToolLimitError(const std::string &message)
+        : ToolError(ExitCode::Data, "LIMIT", message) {}
+};
