@@ -13,7 +13,11 @@ find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
-add_library(hrtcore STATIC native/core/version.c)
+add_library(hrtcore STATIC
+    native/core/version.c
+    native/core/crypto.c
+    native/core/base64.c
+)
 target_include_directories(hrtcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hrtcore PUBLIC OpenSSL::Crypto)
 
@@ -50,4 +54,8 @@ if(BUILD_TESTING)
     target_link_libraries(version_test PRIVATE hrtcore ${HRTPRINT_LIB})
     add_dependencies(version_test hrtprint_build)
     add_test(NAME version COMMAND version_test)
+
+    add_executable(crypto_test tests/crypto_test.cpp)
+    target_link_libraries(crypto_test PRIVATE hrtcore)
+    add_test(NAME crypto COMMAND crypto_test)
 endif()
