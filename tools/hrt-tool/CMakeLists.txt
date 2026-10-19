@@ -36,7 +36,7 @@ add_custom_command(
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
 add_library(hrtcpp STATIC
-    src/api_stub.cpp
+    src/api_live.cpp
     src/backup_envelope.cpp
     src/cli.cpp
     src/commands.cpp

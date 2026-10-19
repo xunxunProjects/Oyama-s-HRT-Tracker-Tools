@@ -7,6 +7,7 @@
 
 struct GlobalOptions {
     std::string server = "https://hrt.mahiro.uk";
+    bool server_explicit = false;
     std::string proxy;
     std::string config_dir;
     std::string token_file;

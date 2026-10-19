@@ -66,6 +66,7 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
 
             if (name == "--server") {
                 parsed.options.server = take_value();
+                parsed.options.server_explicit = true;
             } else if (name == "--proxy") {
                 parsed.options.proxy = take_value();
             } else if (name == "--config-dir") {
@@ -166,21 +167,23 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
 }
 
 void print_help(std::ostream &out) {
-    out << "hrt-tool — Oyama HRT Tracker terminal client (M1 skeleton)\n\n"
+    out << "hrt-tool — Oyama HRT Tracker terminal client\n\n"
         << "Usage: hrt-tool [global flags] <command> [command flags]\n\n"
         << "Commands:\n"
         << "  init                 create the encrypted local vault\n"
-        << "  login                log in (not implemented in M1)\n"
-        << "  logout               revoke the session (not implemented in M1)\n"
-        << "  whoami               show the current account (not implemented in M1)\n"
-        << "  look                 show concentrations (not implemented in M1)\n"
-        << "  add                  add a dose (not implemented in M1)\n"
-        << "  dose ...             manage doses (not implemented in M1)\n"
-        << "  lab ...              manage labs (not implemented in M1)\n"
-        << "  weight ...           manage weight (not implemented in M1)\n"
-        << "  export               export data (not implemented in M1)\n"
-        << "  import               import data (not implemented in M1)\n"
-        << "  snapshot ...         encrypted snapshot (not implemented in M1)\n"
+        << "  login                log in and store an encrypted session\n"
+        << "  logout               revoke the session and forget the token\n"
+        << "  whoami               show the current account\n"
+        << "  snapshot pull        download an encrypted snapshot\n"
+        << "  snapshot push        merge and upload a snapshot\n"
+        << "  snapshot list        list stored revisions\n"
+        << "  look                 show concentrations from --snapshot\n"
+        << "  add                  add a dose\n"
+        << "  dose ...             manage doses\n"
+        << "  lab ...              manage labs\n"
+        << "  weight ...           manage weight\n"
+        << "  export               export data\n"
+        << "  import               import data\n"
         << "  config path          print config paths\n"
         << "  logs show            decrypt an encrypted log file\n"
         << "  version              print versions\n\n"

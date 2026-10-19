@@ -39,3 +39,14 @@ nlohmann::json load_snapshot(const std::filesystem::path &path,
 
 void save_snapshot(const std::filesystem::path &path, const nlohmann::json &payload,
                    const std::string &account_password, const std::string &user_id);
+
+/* Variants for a caller that already holds the cloud key (the vault cache). */
+nlohmann::json load_snapshot_with_key(const std::filesystem::path &path,
+                                      const std::array<uint8_t, 32> &key);
+
+void save_snapshot_with_key(const std::filesystem::path &path,
+                            const nlohmann::json &payload,
+                            const std::array<uint8_t, 32> &key);
+
+std::string cloud_key_to_hex(const std::array<uint8_t, 32> &key);
+std::array<uint8_t, 32> cloud_key_from_hex(const std::string &hex);

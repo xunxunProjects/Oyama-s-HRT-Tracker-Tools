@@ -261,11 +261,66 @@ nlohmann::json load_snapshot(const std::filesystem::path &path,
 
 void save_snapshot(const std::filesystem::path &path, const nlohmann::json &payload,
                    const std::string &account_password, const std::string &user_id) {
-    const std::array<uint8_t, kKeyLen> key = derive_cloud_key(account_password, user_id);
+    save_snapshot_with_key(path, payload, derive_cloud_key(account_password, user_id));
+}
+
+nlohmann::json load_snapshot_with_key(const std::filesystem::path &path,
+                                      const std::array<uint8_t, 32> &key) {
+    const std::string text = read_text_file_capped(path, kMaxSnapshotBytes, "snapshot");
+    nlohmann::json parsed = nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
+    if (parsed.is_discarded() || (!parsed.is_object() && !parsed.is_array())) {
+        throw SnapshotCorruptError("snapshot is not valid JSON");
+    }
+    if (!is_cloud_bundle(parsed)) {
+        return parsed;
+    }
+    return decrypt_cloud_bundle(parsed, key);
+}
+
+void save_snapshot_with_key(const std::filesystem::path &path,
+                            const nlohmann::json &payload,
+                            const std::array<uint8_t, 32> &key) {
     const nlohmann::json bundle = encrypt_cloud_bundle(payload, key);
     const std::string text = bundle.dump();
     if (text.size() > kMaxSnapshotBytes) {
         throw ToolLimitError("snapshot exceeds the 16 MiB limit");
     }
     write_atomic(path, text);
+}
+
+std::string cloud_key_to_hex(const std::array<uint8_t, 32> &key) {
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(key.size() * 2);
+    for (uint8_t byte : key) {
+        out.push_back(digits[byte >> 4]);
+        out.push_back(digits[byte & 0x0f]);
+    }
+    return out;
+}
+
+std::array<uint8_t, 32> cloud_key_from_hex(const std::string &hex) {
+    if (hex.size() != 64) {
+        throw ToolError(ExitCode::Vault, "CLOUD_KEY",
+                        "cached cloud key is malformed; log in again");
+    }
+    std::array<uint8_t, 32> key{};
+    for (size_t i = 0; i < key.size(); ++i) {
+        const char high = hex[i * 2];
+        const char low = hex[i * 2 + 1];
+        auto digit = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        const int hi = digit(high);
+        const int lo = digit(low);
+        if (hi < 0 || lo < 0) {
+            throw ToolError(ExitCode::Vault, "CLOUD_KEY",
+                            "cached cloud key is malformed; log in again");
+        }
+        key[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return key;
 }

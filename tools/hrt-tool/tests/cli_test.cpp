@@ -173,18 +173,25 @@ int main() {
             kPasswordLine);
         CHECK_EQ(init.code, 0);
 
-        const std::vector<std::vector<std::string>> stubs = {
-            {"login"}, {"logout"}, {"whoami"}, {"snapshot", "pull"}, {"config", "get"},
-        };
-        for (const std::vector<std::string> &stub : stubs) {
-            std::vector<std::string> args = stub;
+        const auto with_vault = [&](std::vector<std::string> args) {
             args.push_back("--config-dir");
             args.push_back(temp.path().string());
             args.push_back("--vault-password-stdin");
-            const RunResult result = run(args, kPasswordLine);
-            CHECK_EQ(result.code, 6);
-            CHECK(contains(result.err, "not implemented in M1"));
-        }
+            return args;
+        };
+
+        /* Live commands now reach the API; with no credentials/token they
+           fail at the usage/auth boundary instead of the M1 stub. */
+        CHECK_EQ(run(with_vault({"login"}), kPasswordLine).code, 2);
+        const RunResult logout = run(with_vault({"logout"}), kPasswordLine);
+        CHECK_EQ(logout.code, 0);
+        CHECK(contains(logout.out, "not logged in"));
+        CHECK_EQ(run(with_vault({"whoami"}), kPasswordLine).code, 3);
+        CHECK_EQ(run(with_vault({"snapshot", "pull", "--out", "-"}), kPasswordLine).code, 3);
+
+        const RunResult config_get = run(with_vault({"config", "get"}), kPasswordLine);
+        CHECK_EQ(config_get.code, 6);
+        CHECK(contains(config_get.err, "not implemented in M1"));
     }
 
     {
@@ -264,16 +271,16 @@ int main() {
         CHECK_EQ(init.code, 0);
 
         const std::filesystem::path log_file = temp.path() / "debug.log";
-        const RunResult login = run(
-            {"login", "--config-dir", temp.path().string(), "--vault-password-stdin",
-             "--debug", "--log-file", log_file.string()},
+        const RunResult stub = run(
+            {"config", "get", "--config-dir", temp.path().string(),
+             "--vault-password-stdin", "--debug", "--log-file", log_file.string()},
             kPasswordLine);
-        CHECK_EQ(login.code, 6);
-        CHECK(contains(login.err, "debug: login"));
+        CHECK_EQ(stub.code, 6);
+        CHECK(contains(stub.err, "debug: config get"));
         CHECK(std::filesystem::exists(log_file));
 
         const std::string raw = read_text(log_file);
-        CHECK(!contains(raw, "login"));
+        CHECK(!contains(raw, "config get"));
         CHECK(!contains(raw, "not implemented"));
 
         const RunResult shown = run(
@@ -281,7 +288,7 @@ int main() {
              "--log-file", log_file.string()},
             kPasswordLine);
         CHECK_EQ(shown.code, 0);
-        CHECK(contains(shown.out, "login"));
+        CHECK(contains(shown.out, "config get"));
     }
 
     return test_result();

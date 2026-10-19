@@ -4,14 +4,16 @@
 project. It is a separate codebase from [`hrt-cold`](../hrt-cold/README.md):
 different language, build, CI job, and release artifact.
 
-**Status: M2 local data.** Implemented: the encrypted local vault, the
-master-password entropy gate, encrypted debug logs, the CLI surface, URL/proxy
-policy, the SPKI trust-store state machine, the libcurl transport, a typed
-`ApiClient` stub, the C PK engine (31 reference scenarios), cloud-snapshot
-decryption, sync-payload merge/tombstones, encrypted `HRTE` exports, the
-complete-backup envelope, the Rust printer, and the local `look`/`add`/`dose`/
-`lab`/`weight`/`export`/`import` commands. Still stubbed: the live
-`/api/tool/v1/*` client and the trust prompts (M3/M4).
+**Status: live client (M3 wiring).** Implemented: the encrypted local vault,
+the master-password entropy gate, encrypted debug logs, the CLI surface,
+URL/proxy policy, the SPKI trust-store state machine, the libcurl transport,
+the live `/api/tool/v1/*` client, the C PK engine (31 reference scenarios),
+cloud-snapshot decryption, sync-payload merge/tombstones, encrypted `HRTE`
+exports, the complete-backup envelope, the Rust printer, the local
+`look`/`add`/`dose`/`lab`/`weight`/`export`/`import` commands, and
+`login`/`logout`/`whoami`/`snapshot pull|push|list`. Still to come: the
+first-contact SPKI prompts, Tor/I2P trust decisions, and the optional
+transport envelope (M4).
 
 ## Build
 
@@ -64,9 +66,9 @@ command-line arguments are never used for secrets.
 | --- | --- |
 | `version` | Implemented: tool, C core, and Rust printer versions. |
 | `init [--reset]`, `config path`, `logs show --log-file FILE` | Implemented. |
-| `look`, `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot` (M2). |
-| `login`, `logout`, `whoami` | Stub; the live API is M4. |
-| `snapshot pull|push` | Stub; the live API is M4. |
+| `look`, `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot`. |
+| `login`, `logout`, `whoami` | Implemented against `/api/tool/v1`; the first-contact SPKI prompt is M4. |
+| `snapshot pull`, `snapshot push`, `snapshot list` | Implemented; pull writes an encrypted local snapshot, push merges and retries on `409`. |
 | `config get`, `config set`, `logs <other>` | Stub; exit `6`. |
 
 ### Local snapshot workflow (M2)
@@ -116,6 +118,34 @@ Mutating local commands take an advisory lock on `<snapshot>.lock` and hold it
 across read-modify-write, so concurrent `add`/`import` processes cannot lose
 an update. `look` and `export` do not need the lock and work in a read-only
 directory. Exports refuse to overwrite an existing path.
+
+### Remote workflow (live API)
+
+```sh
+# One-time login. The token, user id, device pass and (by default) the
+# derived cloud key are stored in the encrypted vault.
+hrt-tool login --username alice --account-password-file account.txt
+
+# Download the newest revision as an encrypted local snapshot (mode 0600).
+hrt-tool snapshot pull --out snapshot.json
+
+# Work locally; every command still writes only encrypted snapshots.
+hrt-tool look --snapshot snapshot.json --user-id <id> --account-password-file account.txt
+hrt-tool add --snapshot snapshot.json --user-id <id> --account-password-file account.txt \
+  --drug "Estradiol valerate" --time now --measurement 2mg
+
+# Merge with the server's newest revision, conditional-put, and retry on 409.
+hrt-tool snapshot push --in snapshot.json
+hrt-tool snapshot list
+hrt-tool logout
+```
+
+The server chosen with `--server` is saved in the vault, so later commands use
+it without repeating the flag. `--no-cache-cloud-key` keeps the derived key out
+of the vault; pull/push then ask for the account password. The first-contact
+SPKI prompt and Tor/I2P trust decisions are still M4 work: until then, use
+`--server http://127.0.0.1:PORT` only for local testing and an HTTPS origin for
+anything remote.
 
 The `look` numbers are the uncalibrated baseline: the website's EKF/OU/MIPD
 calibration is not ported yet, and `look` prints a warning saying so.
@@ -248,11 +278,11 @@ pairing order and the open-list removal semantics are pinned to `logic.ts`.
 
 - **M2 (implemented):** local PK model, snapshot decryption, and
   `look`/`add`/`dose`/`lab`/`weight`/`export`/`import`.
-- **M3:** add `/api/tool/v1/*` to the website worker on branch
-  `Tool-Interface/data`, with tests, wait for green CI, then PR and merge as the
-  final step.
-- **M4:** wire the live client, SPKI trust prompts, Tor/I2P, encrypted request
-  envelopes, and integration tests against local `wrangler dev`.
+- **M3 (implemented):** `/api/tool/v1/*` in the website worker (PRs #133/#134)
+  and the live client: `login`, `logout`, `whoami`, `snapshot pull|push|list`.
+- **M4:** first-contact SPKI trust prompts, Tor/I2P trust decisions, the
+  optional encrypted request envelope, and integration tests against local
+  `wrangler dev`.
 - Later: calibration (EKF/OU/MIPD), optional server compute, and the GPG F2F
   advanced mode.
 

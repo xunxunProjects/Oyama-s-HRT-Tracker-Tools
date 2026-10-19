@@ -143,6 +143,24 @@ int main() {
     }
 
     {
+        const std::string hex = cloud_key_to_hex(key);
+        CHECK_EQ(hex.size(), static_cast<size_t>(64));
+        CHECK(cloud_key_from_hex(hex) == key);
+        CHECK_THROWS(cloud_key_from_hex("xyz"), ToolError);
+    }
+
+    {
+        TempDir temp;
+        const std::filesystem::path path = temp.path() / "with-key.json";
+        save_snapshot_with_key(path, payload, key);
+        const std::vector<uint8_t> raw = read_bytes(path);
+        const std::string raw_text(reinterpret_cast<const char *>(raw.data()), raw.size());
+        CHECK(raw_text.find("transfem") == std::string::npos);
+        CHECK(load_snapshot_with_key(path, key) == payload);
+        CHECK_THROWS(load_snapshot_with_key(path, wrong_key), ToolError);
+    }
+
+    {
         TempDir temp;
         const std::filesystem::path path = temp.path() / "oversized.json";
         {
