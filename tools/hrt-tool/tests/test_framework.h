@@ -41,6 +41,22 @@ static int g_failures = 0;
         }                                                                           \
     } while (0)
 
+#define CHECK_THROWS(expr, ExceptionType)                                           \
+    do {                                                                            \
+        bool caught_expected = false;                                               \
+        try {                                                                       \
+            (void)(expr);                                                           \
+        } catch (const ExceptionType &) {                                           \
+            caught_expected = true;                                                 \
+        } catch (...) {                                                             \
+        }                                                                           \
+        if (!caught_expected) {                                                     \
+            std::cerr << __FILE__ << ":" << __LINE__ << " CHECK_THROWS failed: "    \
+                      << #expr << " did not throw " << #ExceptionType << "\n";      \
+            ++g_failures;                                                           \
+        }                                                                           \
+    } while (0)
+
 inline std::string hex_encode(const uint8_t *data, size_t len) {
     static const char digits[] = "0123456789abcdef";
     std::string out;

@@ -47,6 +47,14 @@ target_link_libraries(hrt-tool PRIVATE
 )
 add_dependencies(hrt-tool hrtprint_build)
 
+add_library(hrtcpp STATIC
+    src/entropy.cpp
+    src/paths.cpp
+    src/vault.cpp
+)
+target_include_directories(hrtcpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hrtcpp PUBLIC hrtcore nlohmann_json::nlohmann_json)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(version_test tests/version_test.cpp src/version.cpp)
@@ -59,7 +67,11 @@ if(BUILD_TESTING)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)
 
-    add_executable(entropy_test tests/entropy_test.cpp src/entropy.cpp)
-    target_include_directories(entropy_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_executable(entropy_test tests/entropy_test.cpp)
+    target_link_libraries(entropy_test PRIVATE hrtcpp)
     add_test(NAME entropy COMMAND entropy_test)
+
+    add_executable(vault_test tests/vault_test.cpp)
+    target_link_libraries(vault_test PRIVATE hrtcpp)
+    add_test(NAME vault COMMAND vault_test)
 endif()
