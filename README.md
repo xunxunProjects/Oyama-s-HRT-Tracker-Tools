@@ -27,6 +27,11 @@ The Oyama HRT Tracker website is one compatible producer and consumer of the
 bundle format. It does not handle OpenPGP keys or passphrases, and its direct
 plaintext import path is unauthenticated by design.
 
+The second tool, [`hrt-tool`](tools/hrt-tool/README.md), is the terminal
+client. Its M1 skeleton provides the encrypted local vault, master-password
+gate, encrypted logs, URL/trust policy, and CLI surface; the live server client
+and the local PK model are milestones M2-M4.
+
 ## Download
 
 See the [latest release](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/releases).
@@ -116,6 +121,7 @@ implement its own cryptography or KDF.
 
 ```text
 tools/hrt-cold/      Go CLI, tests, fixtures, notices, and release script
+tools/hrt-tool/      C/C++/Rust terminal client (M1 skeleton)
 docs/native/         Docs-first C/C++ native core design, ABI, build, and test plan
 docs/backup-schema-audit/TOOLS_INTERFACE.md
 configure, CMakeLists.txt, cmake/, include/, tests/native/
@@ -159,6 +165,7 @@ published `0.1.0` release uses per-binary GPG signatures.
 ## Documentation
 
 - [`tools/hrt-cold/README.md`](tools/hrt-cold/README.md) — CLI commands and limits
+- [`tools/hrt-tool/README.md`](tools/hrt-tool/README.md) — terminal client, M1 status
 - [`tools/hrt-cold/HANDOFF.md`](tools/hrt-cold/HANDOFF.md) — checkpoint and evidence
 - [`docs/backup-schema-audit/TOOLS_INTERFACE.md`](docs/backup-schema-audit/TOOLS_INTERFACE.md) — bundle interface
 - [`docs/native/README.md`](docs/native/README.md) — native core status
