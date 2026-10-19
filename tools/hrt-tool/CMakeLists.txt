@@ -17,6 +17,7 @@ add_library(hrtcore STATIC
     native/core/version.c
     native/core/crypto.c
     native/core/base64.c
+    native/core/pk.c
 )
 target_include_directories(hrtcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hrtcore PUBLIC OpenSSL::Crypto)
@@ -42,6 +43,7 @@ add_library(hrtcpp STATIC
     src/http.cpp
     src/log.cpp
     src/paths.cpp
+    src/pk.cpp
     src/prompt.cpp
     src/trust.cpp
     src/vault.cpp
@@ -106,4 +108,10 @@ if(BUILD_TESTING)
     add_executable(api_test tests/api_test.cpp)
     target_link_libraries(api_test PRIVATE hrtcpp)
     add_test(NAME api COMMAND api_test)
+
+    add_executable(pk_test tests/pk_test.cpp)
+    target_link_libraries(pk_test PRIVATE hrtcpp)
+    target_compile_definitions(pk_test PRIVATE
+        HRT_TOOL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+    add_test(NAME pk COMMAND pk_test)
 endif()
