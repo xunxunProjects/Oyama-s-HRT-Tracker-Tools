@@ -201,7 +201,14 @@ int main() {
             kPasswordLine);
         CHECK_EQ(init.code, 0);
 
-        for (const char *command : {"look", "add", "dose", "lab", "weight", "export",
+        const RunResult remote_look =
+            run({"look", "--config-dir", temp.path().string(),
+                 "--vault-password-stdin"},
+                kPasswordLine);
+        CHECK_EQ(remote_look.code, 3);
+        CHECK(contains(remote_look.err, "log in first"));
+
+        for (const char *command : {"add", "dose", "lab", "weight", "export",
                                     "import"}) {
             std::vector<std::string> args{command};
             args.push_back("--config-dir");

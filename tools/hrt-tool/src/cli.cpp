@@ -177,7 +177,7 @@ void print_help(std::ostream &out) {
         << "  snapshot pull        download an encrypted snapshot\n"
         << "  snapshot push        merge and upload a snapshot\n"
         << "  snapshot list        list stored revisions\n"
-        << "  look                 show concentrations from --snapshot\n"
+        << "  look                 show concentrations (remote, or from --snapshot)\n"
         << "  add                  add a dose\n"
         << "  dose ...             manage doses\n"
         << "  lab ...              manage labs\n"

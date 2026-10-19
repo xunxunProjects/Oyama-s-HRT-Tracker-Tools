@@ -804,9 +804,8 @@ std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &fl
             {"24h", 24.0},      {"2d", 48.0}};
 }
 
-int handle_look(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
-    LocalContext context = open_context(parsed, in, out, false);
-    const json payload = normalize_sync_payload(context.payload);
+int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream &out) {
+    const json payload = normalize_sync_payload(raw_payload);
     const ModeKey mode = resolve_mode(parsed, payload, false);
     const std::string mode_name = mode_key_name(mode);
     if (!payload.at("modes").contains(mode_name) ||
@@ -918,6 +917,11 @@ int handle_look(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         "warning: uncalibrated baseline (calibration is not ported yet)");
     render_view(view, parsed.options.json, out);
     return 0;
+}
+
+int handle_look(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+    LocalContext context = open_context(parsed, in, out, false);
+    return render_look(parsed, context.payload, out);
 }
 
 int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
@@ -1326,6 +1330,11 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
 }
 
 } // namespace
+
+int handle_look_payload(const ParsedArgs &parsed, const nlohmann::json &payload,
+                        std::ostream &out) {
+    return render_look(parsed, payload, out);
+}
 
 bool is_local_command(const std::string &command) {
     return command == "look" || command == "add" || command == "dose" ||

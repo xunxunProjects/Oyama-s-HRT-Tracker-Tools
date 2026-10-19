@@ -66,7 +66,8 @@ command-line arguments are never used for secrets.
 | --- | --- |
 | `version` | Implemented: tool, C core, and Rust printer versions. |
 | `init [--reset]`, `config path`, `logs show --log-file FILE` | Implemented. |
-| `look`, `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot`. |
+| `look` | Implemented; without `--snapshot` it pulls and decrypts the newest revision, otherwise it reads the file. |
+| `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot`. |
 | `login`, `logout`, `whoami` | Implemented against `/api/tool/v1`; the first-contact SPKI prompt is M4. |
 | `snapshot pull`, `snapshot push`, `snapshot list` | Implemented; pull writes an encrypted local snapshot, push merges and retries on `409`. |
 | `config get`, `config set`, `logs <other>` | Stub; exit `6`. |
@@ -130,7 +131,11 @@ hrt-tool login --username alice --account-password-file account.txt
 # Pull refuses to overwrite an existing path unless --force is given.
 hrt-tool snapshot pull --out snapshot.json
 
-# Work locally; every command still writes only encrypted snapshots.
+# `look` without --snapshot pulls and decrypts the newest revision in memory.
+hrt-tool look
+hrt-tool look --json
+
+# Or work from the downloaded file; every command writes only encrypted data.
 hrt-tool look --snapshot snapshot.json --user-id <id> --account-password-file account.txt
 hrt-tool add --snapshot snapshot.json --user-id <id> --account-password-file account.txt \
   --drug "Estradiol valerate" --time now --measurement 2mg

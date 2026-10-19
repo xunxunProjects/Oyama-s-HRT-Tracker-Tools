@@ -304,6 +304,25 @@ int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out
     return 0;
 }
 
+int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                        std::ostream &err) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    if (unlocked.session.data.token.empty()) {
+        throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
+    }
+    std::unique_ptr<ApiClient> client = make_api_client(
+        server_for(parsed, unlocked.session.data), http_options_for(parsed, err),
+        unlocked.session.data.token);
+    std::optional<Snapshot> snapshot = client->latest_snapshot();
+    if (!snapshot.has_value()) {
+        throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
+                        "the account has no snapshot yet");
+    }
+    const std::array<uint8_t, 32> key =
+        cloud_key_for(unlocked, parsed, in, out);
+    return handle_look_payload(parsed, payload_from_snapshot(*snapshot, key), out);
+}
+
 int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                      std::ostream &err) {
     if (parsed.command_args.empty()) {
@@ -390,6 +409,11 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
                 return 0;
             }
             merged = merge_sync_payloads(remote_payload, local).payload;
+            if (fingerprint_state(normalize_sync_state(merged)) ==
+                fingerprint_state(normalize_sync_state(remote_payload))) {
+                out << "already up to date (" << current->id << ")\n";
+                return 0;
+            }
             base = current->id;
         }
         for (int attempt = 0; attempt < 3; ++attempt) {
@@ -658,6 +682,13 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         const std::string name =
             parsed.command_args.empty() ? "logs" : "logs " + parsed.command_args.front();
         return command_stub(name, parsed, in, out, err);
+    }
+
+    if (parsed.command == "look" && parsed.options.snapshot.empty()) {
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        if (Vault::exists(paths.vault_file)) {
+            return command_look_remote(parsed, in, out, err);
+        }
     }
 
     if (is_local_command(parsed.command)) {
