@@ -127,6 +127,7 @@ directory. Exports refuse to overwrite an existing path.
 hrt-tool login --username alice --account-password-file account.txt
 
 # Download the newest revision as an encrypted local snapshot (mode 0600).
+# Pull refuses to overwrite an existing path unless --force is given.
 hrt-tool snapshot pull --out snapshot.json
 
 # Work locally; every command still writes only encrypted snapshots.

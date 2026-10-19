@@ -351,6 +351,13 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
         if (out_path == "-") {
             out << payload.dump(2) << "\n";
         } else {
+            if (std::filesystem::exists(out_path) &&
+                !has_argument(parsed.command_args, "--force")) {
+                throw ToolError(
+                    ExitCode::Usage, "SNAPSHOT_EXISTS",
+                    "refusing to overwrite " + out_path +
+                        "; pass --force or choose another path");
+            }
             save_snapshot_with_key(out_path, payload, key);
             out << "pulled " << snapshot->id << " (" << snapshot->created_at
                 << ") -> " << out_path << "\n";
