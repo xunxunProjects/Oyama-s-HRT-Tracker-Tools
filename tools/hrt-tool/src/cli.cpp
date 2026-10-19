@@ -69,6 +69,7 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
                 parsed.options.server_explicit = true;
             } else if (name == "--proxy") {
                 parsed.options.proxy = take_value();
+                parsed.options.proxy_explicit = true;
             } else if (name == "--config-dir") {
                 parsed.options.config_dir = take_value();
             } else if (name == "--token-file") {
@@ -195,6 +196,11 @@ void print_help(std::ostream &out) {
         << "  --vault-password-file FILE  --vault-password-stdin  --log-file FILE\n"
         << "  --snapshot FILE  --mode transfem|transmasc  --utc\n"
         << "  --user-id ID  --account-password-file FILE  --account-password-stdin\n\n"
+        << "Command flags:\n"
+        << "  login --username USER\n"
+        << "  snapshot pull --out FILE [--id ID] [--force]\n"
+        << "  snapshot push --in FILE\n"
+        << "  look --all  --at OFFSETS  --labs N  --json\n\n"
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
 

@@ -32,9 +32,15 @@ public:
 
 class ApiTwoFactorRequired : public ToolError {
 public:
-    explicit ApiTwoFactorRequired(const std::string &method)
+    explicit ApiTwoFactorRequired(std::string method)
         : ToolError(ExitCode::Vault, "TWO_FACTOR_REQUIRED",
-                    "a second factor is required (" + method + ")") {}
+                    "a second factor is required (" + method + ")"),
+          method_(std::move(method)) {}
+
+    const std::string &method() const noexcept { return method_; }
+
+private:
+    std::string method_;
 };
 
 class SnapshotConflictError : public ToolError {
@@ -77,3 +83,17 @@ std::unique_ptr<ApiClient> make_api_client(const std::string &server,
 /* Pure response parsers, exposed for tests. */
 LoginResult parse_login_response(const nlohmann::json &body);
 Snapshot parse_snapshot_response(const nlohmann::json &body);
+
+/*
+ * Map a non-2xx response to a typed error. 3xx is refused (the client never
+ * follows redirects), 401/403 become ApiAuthError, and everything else is a
+ * Network error carrying the server's code.
+ */
+void throw_http_status(long status, const std::string &body, const char *what);
+
+/* Parse the `current` revision from a 409 body. */
+std::pair<std::string, int64_t> parse_conflict_current(const nlohmann::json &body);
+
+/* Reject a token or revision id containing header/URL metacharacters. */
+bool valid_bearer_token(const std::string &token);
+bool valid_snapshot_id(const std::string &id);

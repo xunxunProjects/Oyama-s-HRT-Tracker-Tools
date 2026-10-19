@@ -147,8 +147,16 @@ hrt-tool snapshot list
 hrt-tool logout
 ```
 
-The server chosen with `--server` is saved in the vault, so later commands use
-it without repeating the flag. `--no-cache-cloud-key` keeps the derived key out
+`snapshot pull` writes only an encrypted cloud bundle; a legacy plaintext
+revision is available only with `--out -`. `snapshot push` accepts cloud
+bundles, plaintext sync payloads, `HRTE` exports, and complete-backup
+envelopes; categories the cloud payload cannot carry are reported.
+
+The server and proxy chosen at login are saved in the vault, so later commands
+use them without repeating the flags. A saved token is only sent to that saved
+origin: passing a different `--server` to an authenticated command is refused
+with `SERVER_MISMATCH`; run `login --server NEW` to switch (which clears the old
+origin's token and device pass). `--no-cache-cloud-key` keeps the derived key out
 of the vault on that command; pass it to every command that may derive the key,
 or the first `pull`/`look` will cache it. The first-contact
 SPKI prompt and Tor/I2P trust decisions are still M4 work: until then, use
@@ -222,6 +230,10 @@ decrypts the records to stdout. Plaintext logs are never written.
 - `export --out FILE` refuses to replace an existing file, and all local reads
   are capped at 16 MiB after a regular-file check, so a FIFO or a growing file
   cannot exhaust memory.
+- The stored JWT is bound to the origin that issued it; an authenticated
+  command with a different `--server` is refused instead of sending the token
+  elsewhere. `logout` always clears the local token, cached cloud key and
+  device pass, even when the revocation request fails.
 - Login sends the account password to the server, exactly as the website does.
   The cloud key is derived from that password and the user id, so a
   compromised worker or request log can derive the key. The "server cannot read
