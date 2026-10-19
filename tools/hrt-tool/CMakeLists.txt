@@ -38,9 +38,11 @@ add_library(hrtcpp STATIC
     src/cli.cpp
     src/commands.cpp
     src/entropy.cpp
+    src/http.cpp
     src/log.cpp
     src/paths.cpp
     src/prompt.cpp
+    src/trust.cpp
     src/vault.cpp
     src/version.cpp
 )
@@ -49,6 +51,9 @@ target_link_libraries(hrtcpp PUBLIC
     hrtcore
     nlohmann_json::nlohmann_json
     ${HRTPRINT_LIB}
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 add_dependencies(hrtcpp hrtprint_build)
 
@@ -88,4 +93,12 @@ if(BUILD_TESTING)
     add_executable(cli_test tests/cli_test.cpp)
     target_link_libraries(cli_test PRIVATE hrtcpp)
     add_test(NAME cli COMMAND cli_test)
+
+    add_executable(http_test tests/http_test.cpp)
+    target_link_libraries(http_test PRIVATE hrtcpp)
+    add_test(NAME http COMMAND http_test)
+
+    add_executable(trust_test tests/trust_test.cpp)
+    target_link_libraries(trust_test PRIVATE hrtcpp)
+    add_test(NAME trust COMMAND trust_test)
 endif()
