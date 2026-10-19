@@ -382,11 +382,11 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "hrt-tool/0.1.0");
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, options.timeout_s);
-    // M4: replace automatic redirects with a re-validated loop that re-checks
-    // the URL policy and trust pin on every hop, and cap response headers
-    // alongside the body. M1's ApiClient stub never opens a socket.
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
+    // Never follow a redirect automatically: a 307/308 would re-send the
+    // login body (the account password) to whatever host the response names.
+    // M4 may add a loop that re-validates the URL policy and trust pin on every
+    // hop; until then a 3xx is a typed error.
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, options.insecure_tls ? 0L : 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, options.insecure_tls ? 0L : 2L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);

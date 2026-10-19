@@ -236,10 +236,9 @@ decrypts the records to stdout. Plaintext logs are never written.
 - Trust pins the SPKI SHA-256, not the leaf certificate, so certificate
   renewals do not break the client. M1 implements the trust-store state
   machine; live pin enforcement lands with the real client in M4.
-- Automatic redirects currently follow libcurl's default; the M4 live client
-  will replace them with a re-validated redirect loop and cap response
-  headers alongside the body. The M1 `ApiClient` stub opens no socket, so the
-  transport path is not reachable yet.
+- Redirects are not followed. A `3xx` is a typed error, so a `307`/`308`
+  cannot re-send the login body (the account password) to another host. M4 may
+  add a loop that re-validates the URL policy and trust pin on every hop.
 - `logs show` requires `--log-file FILE` in M1; a default log location in the
   encrypted vault is M4 work.
 - Windows relies on NTFS ACLs rather than Unix mode bits; the Windows build
