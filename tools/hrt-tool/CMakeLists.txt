@@ -35,6 +35,7 @@ add_custom_command(
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
 add_library(hrtcpp STATIC
+    src/api_stub.cpp
     src/cli.cpp
     src/commands.cpp
     src/entropy.cpp
@@ -101,4 +102,8 @@ if(BUILD_TESTING)
     add_executable(trust_test tests/trust_test.cpp)
     target_link_libraries(trust_test PRIVATE hrtcpp)
     add_test(NAME trust COMMAND trust_test)
+
+    add_executable(api_test tests/api_test.cpp)
+    target_link_libraries(api_test PRIVATE hrtcpp)
+    add_test(NAME api COMMAND api_test)
 endif()

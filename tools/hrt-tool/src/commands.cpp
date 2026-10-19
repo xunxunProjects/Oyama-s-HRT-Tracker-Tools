@@ -1,5 +1,6 @@
 #include "commands.h"
 
+#include "api.h"
 #include "error.h"
 #include "log.h"
 #include "paths.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -80,6 +82,23 @@ int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream
         EncryptedLog::append(parsed.options.log_file, session.log_key,
                              "debug: " + name + " invoked");
     }
+
+    HttpOptions http;
+    http.proxy = parsed.options.proxy;
+    http.debug = parsed.options.debug;
+    http.trace = parsed.options.trace;
+    http.timeout_s = parsed.options.timeout_s;
+    http.insecure_tls = parsed.options.insecure_tls;
+    std::unique_ptr<ApiClient> client = make_api_client(parsed.options.server, http);
+
+    if (name == "login") {
+        (void)client->login("", "", "", "", session.data.device_pass);
+    } else if (name == "logout") {
+        client->logout();
+    } else if (name == "whoami") {
+        (void)client->me();
+    }
+
     throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
                     name + " is not implemented in M1");
 }
