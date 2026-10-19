@@ -132,6 +132,14 @@ public:
     }
 
     Snapshot snapshot_by_id(const std::string &id) override {
+        /* Revision ids are UUIDs. Refuse path/query metacharacters before
+           they enter the request URL. */
+        if (id.empty() || id.size() > 64 ||
+            id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") !=
+                std::string::npos) {
+            throw ToolError(ExitCode::Usage, "SNAPSHOT_ID",
+                            "invalid snapshot id");
+        }
         HttpResponse response = request("GET", "/snapshot/" + id, "", true);
         if (response.status < 200 || response.status >= 300) {
             throw_http_error(response.status, response.body, "snapshot");

@@ -890,12 +890,15 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
     std::sort(labs.begin(), labs.end(), [](const json &a, const json &b) {
         return number_or(a, "timeH", 0.0) > number_or(b, "timeH", 0.0);
     });
-    int lab_count = 3;
+    const bool show_all_labs =
+        flags.flags.count("--all") != 0 || flags.flags.count("-a") != 0;
+    size_t lab_count = show_all_labs ? labs.size() : 3;
     if (flags.values.count("--labs") != 0) {
-        lab_count = std::max(0, std::atoi(flags.values.at("--labs").c_str()));
+        lab_count = static_cast<size_t>(
+            std::max(0, std::atoi(flags.values.at("--labs").c_str())));
     }
-    for (int i = 0; i < lab_count && i < static_cast<int>(labs.size()); ++i) {
-        const json &lab = labs[static_cast<size_t>(i)];
+    for (size_t i = 0; i < lab_count && i < labs.size(); ++i) {
+        const json &lab = labs[i];
         const std::string unit = string_or(lab, "unit", "");
         const std::string assay = string_or(lab, "assay", "");
         const bool t_unit = unit == "ng/dl" || unit == "nmol/l";

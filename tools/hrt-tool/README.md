@@ -132,8 +132,9 @@ hrt-tool login --username alice --account-password-file account.txt
 hrt-tool snapshot pull --out snapshot.json
 
 # `look` without --snapshot pulls and decrypts the newest revision in memory.
+# --all lists every stored lab (the default is the three most recent).
 hrt-tool look
-hrt-tool look --json
+hrt-tool look --all --json
 
 # Or work from the downloaded file; every command writes only encrypted data.
 hrt-tool look --snapshot snapshot.json --user-id <id> --account-password-file account.txt
@@ -148,7 +149,8 @@ hrt-tool logout
 
 The server chosen with `--server` is saved in the vault, so later commands use
 it without repeating the flag. `--no-cache-cloud-key` keeps the derived key out
-of the vault; pull/push then ask for the account password. The first-contact
+of the vault on that command; pass it to every command that may derive the key,
+or the first `pull`/`look` will cache it. The first-contact
 SPKI prompt and Tor/I2P trust decisions are still M4 work: until then, use
 `--server http://127.0.0.1:PORT` only for local testing and an HTTPS origin for
 anything remote.
