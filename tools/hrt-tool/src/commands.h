@@ -1,0 +1,39 @@
+#pragma once
+
+#include <istream>
+#include <ostream>
+#include <string>
+#include <vector>
+
+struct GlobalOptions {
+    std::string server = "https://hrt.mahiro.uk";
+    std::string proxy;
+    std::string config_dir;
+    std::string token_file;
+    bool debug = false;
+    bool trace = false;
+    bool json = false;
+    bool no_color = false;
+    bool yes = false;
+    long timeout_s = 30;
+    bool trust_server = false;
+    bool insecure_tls = false;
+    std::string transport = "auto";
+    bool cache_cloud_key = true;
+    std::string compute = "local";
+    std::string vault_password_file;
+    bool vault_password_stdin = false;
+    std::string log_file;
+};
+
+struct ParsedArgs {
+    GlobalOptions options;
+    std::string command;
+    std::vector<std::string> command_args;
+    bool help = false;
+};
+
+int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out, std::ostream &err);
+
+std::string read_vault_password(const GlobalOptions &options, std::istream &in,
+                                std::ostream &out, bool confirm);

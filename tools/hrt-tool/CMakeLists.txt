@@ -34,33 +34,38 @@ add_custom_command(
 )
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
-add_executable(hrt-tool src/main.cpp src/version.cpp)
-target_include_directories(hrt-tool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(hrt-tool PRIVATE
+add_library(hrtcpp STATIC
+    src/cli.cpp
+    src/commands.cpp
+    src/entropy.cpp
+    src/log.cpp
+    src/paths.cpp
+    src/prompt.cpp
+    src/vault.cpp
+    src/version.cpp
+)
+target_include_directories(hrtcpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hrtcpp PUBLIC
     hrtcore
-    ${HRTPRINT_LIB}
-    CURL::libcurl
     nlohmann_json::nlohmann_json
+    ${HRTPRINT_LIB}
+)
+add_dependencies(hrtcpp hrtprint_build)
+
+add_executable(hrt-tool src/main.cpp)
+target_link_libraries(hrt-tool PRIVATE
+    hrtcpp
+    CURL::libcurl
     Threads::Threads
     ${CMAKE_DL_LIBS}
     m
 )
 add_dependencies(hrt-tool hrtprint_build)
 
-add_library(hrtcpp STATIC
-    src/entropy.cpp
-    src/log.cpp
-    src/paths.cpp
-    src/vault.cpp
-)
-target_include_directories(hrtcpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(hrtcpp PUBLIC hrtcore nlohmann_json::nlohmann_json)
-
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(version_test tests/version_test.cpp src/version.cpp)
-    target_include_directories(version_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(version_test PRIVATE hrtcore ${HRTPRINT_LIB})
+    add_executable(version_test tests/version_test.cpp)
+    target_link_libraries(version_test PRIVATE hrtcpp)
     add_dependencies(version_test hrtprint_build)
     add_test(NAME version COMMAND version_test)
 
@@ -79,4 +84,8 @@ if(BUILD_TESTING)
     add_executable(log_test tests/log_test.cpp)
     target_link_libraries(log_test PRIVATE hrtcpp)
     add_test(NAME log COMMAND log_test)
+
+    add_executable(cli_test tests/cli_test.cpp)
+    target_link_libraries(cli_test PRIVATE hrtcpp)
+    add_test(NAME cli COMMAND cli_test)
 endif()
