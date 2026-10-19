@@ -4,12 +4,14 @@
 project. It is a separate codebase from [`hrt-cold`](../hrt-cold/README.md):
 different language, build, CI job, and release artifact.
 
-**Status: M1 skeleton.** Implemented: the encrypted local vault, the
+**Status: M2 local data.** Implemented: the encrypted local vault, the
 master-password entropy gate, encrypted debug logs, the CLI surface, URL/proxy
-policy, the SPKI trust-store state machine, the libcurl transport, and a typed
-`ApiClient`. Not implemented yet: the live `/api/tool/v1/*` client, the local
-PK model, and the data commands. Every server/data command exits `6` with
-`not implemented in M1`.
+policy, the SPKI trust-store state machine, the libcurl transport, a typed
+`ApiClient` stub, the C PK engine (27 reference scenarios), cloud-snapshot
+decryption, sync-payload merge/tombstones, encrypted `HRTE` exports, the
+complete-backup envelope, the Rust printer, and the local `look`/`add`/`dose`/
+`lab`/`weight`/`export`/`import` commands. Still stubbed: the live
+`/api/tool/v1/*` client and the trust prompts (M3/M4).
 
 ## Build
 
@@ -58,16 +60,51 @@ command-line arguments are never used for secrets.
 
 ## Commands
 
-| Command | M1 status |
+| Command | Status |
 | --- | --- |
 | `version` | Implemented: tool, C core, and Rust printer versions. |
-| `init [--reset]` | Implemented: create the encrypted vault. |
-| `config path` | Implemented: print the config directory and vault path. |
-| `logs show --log-file FILE` | Implemented: decrypt encrypted log records to stdout. |
-| `login`, `logout`, `whoami` | Stub: unlock the vault, call the typed `ApiClient` stub, exit `6`. |
-| `look`, `add`, `dose`, `lab`, `weight` | Stub: unlock the vault, exit `6`. |
-| `export`, `import`, `snapshot` | Stub: unlock the vault, exit `6`. |
-| `config get`, `config set`, `logs <other>` | Stub: exit `6`. |
+| `init [--reset]`, `config path`, `logs show --log-file FILE` | Implemented. |
+| `look`, `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot` (M2). |
+| `login`, `logout`, `whoami` | Stub; the live API is M4. |
+| `snapshot pull|push` | Stub; the live API is M4. |
+| `config get`, `config set`, `logs <other>` | Stub; exit `6`. |
+
+### Local snapshot workflow (M2)
+
+The M2 commands work from a local snapshot file: either the website's
+end-to-end-encrypted cloud bundle (`{cloud:1, iv, data}`) or a legacy plaintext
+payload. An encrypted snapshot needs the account password and the account's
+user id; both are used to derive the cloud key exactly as the website does.
+
+```sh
+# Read the snapshot and print concentrations plus recent labs.
+hrt-tool look --snapshot snapshot.json --user-id <id> \
+  --account-password-file account.txt
+
+# Add a dose and write a new encrypted snapshot.
+hrt-tool add --snapshot snapshot.json --user-id <id> \
+  --account-password-file account.txt \
+  --drug "Estradiol valerate" --time 2026y10m19d --measurement 2mg
+
+# Export plaintext to stdout, or an encrypted HRTE file.
+hrt-tool export --out - --snapshot snapshot.json --user-id <id> \
+  --account-password-file account.txt
+hrt-tool export --out backup.hrte --vault-password-file vault.txt \
+  --snapshot snapshot.json --user-id <id> --account-password-file account.txt
+
+# Import a sync payload or a complete-backup envelope (merge by default).
+hrt-tool import --in backup.hrte --vault-password-file vault.txt \
+  --snapshot snapshot.json --user-id <id> --account-password-file account.txt
+```
+
+`--account-password-file` and `--vault-password-file` must be mode `0600`.
+The account password unlocks the cloud snapshot; the vault master password
+encrypts `HRTE` export files. `import --replace` needs `--yes` (or a typed
+`yes`) and replaces the whole snapshot; the default is the website's merge
+rules with tombstones.
+
+The `look` numbers are the uncalibrated baseline: the website's EKF/OU/MIPD
+calibration is not ported yet, and `look` prints a warning saying so.
 
 Global flags (accepted before or after the command):
 
@@ -77,6 +114,8 @@ Global flags (accepted before or after the command):
 --trust-server  --insecure-tls  --transport auto|tls|openssl-v1
 --no-cache-cloud-key  --compute local|server
 --vault-password-file FILE  --vault-password-stdin  --log-file FILE
+--snapshot FILE  --mode transfem|transmasc  --utc
+--user-id ID  --account-password-file FILE  --account-password-stdin
 ```
 
 ## Vault format
@@ -121,8 +160,9 @@ decrypts the records to stdout. Plaintext logs are never written.
 
 - All local state is encrypted at rest: token, user id, device pass, cached
   cloud key, server/proxy settings, trust pins, and the OpSec acknowledgement.
-- Plaintext is written only to stdout. `export` will write an encrypted
-  container; plaintext is available only with `--out -` (M2).
+- Plaintext is written only to stdout. `export --out FILE` writes an encrypted
+  `HRTE` container; plaintext is available only with `--out -`. `import`
+  accepts encrypted `HRTE` or plaintext input.
 - Login sends the account password to the server, exactly as the website does.
   The cloud key is derived from that password and the user id, so a
   compromised worker or request log can derive the key. The "server cannot read
@@ -171,11 +211,19 @@ tools/hrt-tool/
 `hrt-cold`, the root `CMakeLists.txt`, `include/hrtcold/`, and `tests/native/`
 are not part of this build and are not modified by it.
 
+## PK reference vectors
+
+`testdata/pk-vectors.json` is generated from the website's `logic.ts` with
+vitest. To regenerate it, copy a generator test into the website repository's
+`tests/` directory, run it with `TZ=UTC` and the website's `vitest`, and merge
+the result. The C engine is validated against all 27 scenarios (injection,
+oral, sublingual, gel, patch, CPA, T, multi-dose, weight, custom params) at
+`1e-7` relative tolerance, plus the grid endpoints and AUC.
+
 ## Roadmap
 
-- **M2:** port the local PK model, decrypt snapshots, and implement
-  `look`/`add`/`dose`/`lab`/`weight`/`export`/`import` against local files and
-  test vectors.
+- **M2 (implemented):** local PK model, snapshot decryption, and
+  `look`/`add`/`dose`/`lab`/`weight`/`export`/`import`.
 - **M3:** add `/api/tool/v1/*` to the website worker on branch
   `Tool-Interface/data`, with tests, wait for green CI, then PR and merge as the
   final step.
