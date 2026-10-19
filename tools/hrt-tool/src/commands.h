@@ -27,6 +27,9 @@ struct GlobalOptions {
     std::string user_id;
     std::string account_password_file;
     bool account_password_stdin = false;
+    std::string snapshot;
+    std::string mode;
+    bool utc = false;
 };
 
 struct ParsedArgs {

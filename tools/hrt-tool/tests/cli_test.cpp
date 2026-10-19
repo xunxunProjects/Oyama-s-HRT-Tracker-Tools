@@ -174,10 +174,7 @@ int main() {
         CHECK_EQ(init.code, 0);
 
         const std::vector<std::vector<std::string>> stubs = {
-            {"login"},          {"logout"},      {"whoami"},   {"look"},
-            {"add"},            {"dose", "list"}, {"lab", "list"},
-            {"weight", "get"},  {"export"},      {"import"},   {"snapshot", "pull"},
-            {"config", "get"},
+            {"login"}, {"logout"}, {"whoami"}, {"snapshot", "pull"}, {"config", "get"},
         };
         for (const std::vector<std::string> &stub : stubs) {
             std::vector<std::string> args = stub;
@@ -196,6 +193,19 @@ int main() {
             {"init", "--config-dir", temp.path().string(), "--vault-password-stdin"},
             kPasswordLine);
         CHECK_EQ(init.code, 0);
+
+        for (const char *command : {"look", "add", "dose", "lab", "weight", "export",
+                                    "import"}) {
+            std::vector<std::string> args{command};
+            args.push_back("--config-dir");
+            args.push_back(temp.path().string());
+            args.push_back("--vault-password-stdin");
+            const RunResult result = run(args, kPasswordLine);
+            CHECK_EQ(result.code, 2);
+            CHECK(contains(result.err, "--snapshot") ||
+                  contains(result.err, "missing --out") ||
+                  contains(result.err, "missing --in"));
+        }
 
         const std::filesystem::path password_file = temp.path() / "password.txt";
         {

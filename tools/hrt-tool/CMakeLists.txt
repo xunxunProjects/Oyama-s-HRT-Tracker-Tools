@@ -43,6 +43,7 @@ add_library(hrtcpp STATIC
     src/encrypted_file.cpp
     src/entropy.cpp
     src/http.cpp
+    src/local_commands.cpp
     src/log.cpp
     src/model.cpp
     src/paths.cpp
@@ -100,6 +101,12 @@ if(BUILD_TESTING)
     add_executable(cli_test tests/cli_test.cpp)
     target_link_libraries(cli_test PRIVATE hrtcpp)
     add_test(NAME cli COMMAND cli_test)
+
+    add_executable(local_commands_test tests/local_commands_test.cpp)
+    target_link_libraries(local_commands_test PRIVATE hrtcpp)
+    target_compile_definitions(local_commands_test PRIVATE
+        HRT_TOOL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+    add_test(NAME local_commands COMMAND local_commands_test)
 
     add_executable(http_test tests/http_test.cpp)
     target_link_libraries(http_test PRIVATE hrtcpp)

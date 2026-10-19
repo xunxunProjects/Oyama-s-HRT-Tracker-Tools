@@ -25,6 +25,8 @@ std::array<uint8_t, 32> derive_cloud_key(const std::string &password,
 
 bool is_cloud_bundle(const nlohmann::json &value);
 
+bool snapshot_is_encrypted(const std::filesystem::path &path);
+
 nlohmann::json decrypt_cloud_bundle(const nlohmann::json &bundle,
                                     const std::array<uint8_t, 32> &key);
 

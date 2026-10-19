@@ -162,6 +162,23 @@ bool is_cloud_bundle(const nlohmann::json &value) {
            value.at("data").is_string();
 }
 
+bool snapshot_is_encrypted(const std::filesystem::path &path) {
+    std::error_code size_error;
+    const auto size = std::filesystem::file_size(path, size_error);
+    if (size_error || size > kMaxSnapshotBytes) {
+        return false;
+    }
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        return false;
+    }
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    const nlohmann::json parsed =
+        nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
+    return !parsed.is_discarded() && is_cloud_bundle(parsed);
+}
+
 nlohmann::json decrypt_cloud_bundle(const nlohmann::json &bundle,
                                     const std::array<uint8_t, 32> &key) {
     if (!is_cloud_bundle(bundle)) {

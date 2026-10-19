@@ -3,6 +3,7 @@
 #include "api.h"
 #include "entropy.h"
 #include "error.h"
+#include "local_commands.h"
 #include "log.h"
 #include "paths.h"
 #include "prompt.h"
@@ -265,6 +266,10 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         const std::string name =
             parsed.command_args.empty() ? "logs" : "logs " + parsed.command_args.front();
         return command_stub(name, parsed, in, out, err);
+    }
+
+    if (is_local_command(parsed.command)) {
+        return handle_local_command(parsed, in, out, err);
     }
 
     std::string name = parsed.command;

@@ -133,6 +133,17 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
             } else if (name == "--account-password-stdin") {
                 boolean_flag();
                 parsed.options.account_password_stdin = true;
+            } else if (name == "--snapshot") {
+                parsed.options.snapshot = take_value();
+            } else if (name == "--mode") {
+                const std::string value = take_value();
+                if (value != "transfem" && value != "transmasc") {
+                    usage_error("--mode must be transfem or transmasc");
+                }
+                parsed.options.mode = value;
+            } else if (name == "--utc") {
+                boolean_flag();
+                parsed.options.utc = true;
             } else {
                 if (!command_seen) {
                     usage_error("unknown option: " + name);
@@ -177,7 +188,9 @@ void print_help(std::ostream &out) {
         << "  --json  --no-color  --yes  --timeout SECONDS  --trust-server\n"
         << "  --insecure-tls  --transport auto|tls|openssl-v1\n"
         << "  --no-cache-cloud-key  --compute local|server\n"
-        << "  --vault-password-file FILE  --vault-password-stdin  --log-file FILE\n\n"
+        << "  --vault-password-file FILE  --vault-password-stdin  --log-file FILE\n"
+        << "  --snapshot FILE  --mode transfem|transmasc  --utc\n"
+        << "  --user-id ID  --account-password-file FILE  --account-password-stdin\n\n"
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
 
