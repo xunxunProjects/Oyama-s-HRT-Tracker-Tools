@@ -36,6 +36,9 @@ std::string suggested_proxy_for_host(const std::string &host);
 
 struct HttpOptions {
     std::string proxy;
+    /* Hex SPKI SHA-256. When set, libcurl refuses the TLS handshake unless the
+       server key matches, before any request body is sent. */
+    std::string pinned_spki_sha256;
     bool debug = false;
     bool trace = false;
     long timeout_s = 30;

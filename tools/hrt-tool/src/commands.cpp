@@ -263,9 +263,9 @@ void validate_hidden_service_host(const Url &url) {
     }
 }
 
-void ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
-                  std::istream &in, std::ostream &err,
-                  const std::string &server) {
+std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
+                         std::istream &in, std::ostream &err,
+                         const std::string &server) {
     const Url parsed_url = parse_url(server);
     validate_server_url(parsed_url);
     validate_hidden_service_host(parsed_url);
@@ -273,24 +273,42 @@ void ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     const bool i2p = is_i2p_host(parsed_url.host);
 
     HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    if (onion || i2p) {
+        /* Decide routing before any lookup: a .onion name must never reach the
+           local resolver, and only socks5h keeps DNS at the proxy. */
+        const std::string network = onion ? "Tor" : "I2P";
+        const std::string suggested = suggested_proxy_for_host(parsed_url.host);
+        const std::string set_proxy =
+            "hrt-tool config set proxy " + suggested;
+        if (http.proxy.empty()) {
+            throw ToolError(ExitCode::Network,
+                            onion ? "TOR_PROXY_MISSING" : "I2P_PROXY_MISSING",
+                            std::string("this is a ") + network + " address but no " +
+                                network + " proxy is configured. Run: " + set_proxy);
+        }
+        if (lower_ascii(parse_url(http.proxy).scheme) != "socks5h") {
+            throw ToolError(
+                ExitCode::Usage, "PROXY_DNS",
+                std::string("hidden-service traffic must use a socks5h:// proxy "
+                            "so DNS is resolved by the ") +
+                    network + " proxy. Run: " + set_proxy);
+        }
+    }
+
+    std::string base = server;
+    while (!base.empty() && base.back() == '/') {
+        base.pop_back();
+    }
+
     HttpClient client;
     HttpResponse response;
     try {
-        response = client.request("GET", server + "/api/tool/v1/version",
+        response = client.request("GET", base + "/api/tool/v1/version",
                                   {"Accept: application/json"}, "", http);
     } catch (const ToolError &error) {
         if (onion || i2p) {
-            const std::string suggested = suggested_proxy_for_host(parsed_url.host);
             const std::string network = onion ? "Tor" : "I2P";
-            if (http.proxy.empty()) {
-                throw ToolError(
-                    ExitCode::Network,
-                    onion ? "TOR_PROXY_MISSING" : "I2P_PROXY_MISSING",
-                    std::string("this is a ") + network +
-                        " address but no " + network +
-                        " proxy is configured. Run: hrt-tool config set proxy " +
-                        suggested);
-            }
+            const std::string suggested = suggested_proxy_for_host(parsed_url.host);
             throw ToolError(
                 ExitCode::Network,
                 onion ? "TOR_PROXY_FAILED" : "I2P_PROXY_FAILED",
@@ -330,7 +348,7 @@ void ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     }
 
     if (state == TrustState::Trusted) {
-        return;
+        return tls ? pin : std::string{};
     }
 
     if (state == TrustState::Changed) {
@@ -408,6 +426,7 @@ void ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
         err << "trusted and pinned " << origin << "\n";
     }
+    return tls ? pin : std::string{};
 }
 
 std::array<uint8_t, 32> cloud_key_for(UnlockedVault &unlocked,
@@ -474,7 +493,8 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     const std::string username = read_username(parsed, in, out);
     const std::string server = server_for(parsed, unlocked.session.data);
     /* Decide trust before the account password is typed or sent. */
-    ensure_trust(unlocked, parsed, in, err, server);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
     const std::string password = read_account_password(parsed.options, in, out);
     /* A device pass is a credential for one server; never send a cached one
        to a different origin. */
@@ -482,8 +502,9 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         server == unlocked.session.data.server ? unlocked.session.data.device_pass
                                                : std::string{};
 
-    std::unique_ptr<ApiClient> client =
-        make_api_client(server, http_options_for(parsed, unlocked.session.data, err));
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client = make_api_client(server, http);
     LoginResult result;
     try {
         result = client->login(username, password, "", "", device_pass);
@@ -557,10 +578,13 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
                                       ? parsed.options.server
                                       : unlocked.session.data.server;
         try {
-            ensure_trust(unlocked, parsed, in, err, saved);
-            std::unique_ptr<ApiClient> client = make_api_client(
-                saved, http_options_for(parsed, unlocked.session.data, err),
-                unlocked.session.data.token);
+            const std::string trusted_pin =
+                ensure_trust(unlocked, parsed, in, err, saved);
+            HttpOptions http =
+                http_options_for(parsed, unlocked.session.data, err);
+            http.pinned_spki_sha256 = trusted_pin;
+            std::unique_ptr<ApiClient> client =
+                make_api_client(saved, http, unlocked.session.data.token);
             client->logout();
         } catch (const ToolError &error) {
             /* Revocation is best effort; local secrets are cleared either
@@ -595,10 +619,12 @@ int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
     const std::string server = authenticated_server(parsed, unlocked.session.data);
-    ensure_trust(unlocked, parsed, in, err, server);
-    std::unique_ptr<ApiClient> client = make_api_client(
-        server, http_options_for(parsed, unlocked.session.data, err),
-        unlocked.session.data.token);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session.data.token);
     const nlohmann::json me = client->me();
     if (parsed.options.json) {
         out << me.dump(2) << "\n";
@@ -619,10 +645,12 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
     const std::string server = authenticated_server(parsed, unlocked.session.data);
-    ensure_trust(unlocked, parsed, in, err, server);
-    std::unique_ptr<ApiClient> client = make_api_client(
-        server, http_options_for(parsed, unlocked.session.data, err),
-        unlocked.session.data.token);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session.data.token);
     std::optional<Snapshot> snapshot = client->latest_snapshot();
     if (!snapshot.has_value()) {
         throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
@@ -662,10 +690,12 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
     const std::string server = authenticated_server(parsed, unlocked.session.data);
-    ensure_trust(unlocked, parsed, in, err, server);
-    std::unique_ptr<ApiClient> client = make_api_client(
-        server, http_options_for(parsed, unlocked.session.data, err),
-        unlocked.session.data.token);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session.data.token);
 
     if (sub == "list") {
         const nlohmann::json list = client->list_snapshots();
@@ -919,9 +949,13 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             }
             unlocked.session.data.server = next;
             out << "server set: " << next << "\n";
-        } else if (key == "transport" || key == "compute") {
+        } else if (key == "transport") {
             throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
-                            key + " cannot be changed until M4 is complete");
+                            "the encrypted transport envelope is not "
+                            "implemented; plain HTTPS/TLS is used");
+        } else if (key == "compute") {
+            throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
+                            "server compute is reserved; computation is local");
         } else {
             throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
         }

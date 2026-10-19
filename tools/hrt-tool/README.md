@@ -280,9 +280,14 @@ decrypts the records to stdout. Plaintext logs are never written.
   only for loopback, `.onion`, and `.i2p` hosts, requires an explicit trust
   decision (or an already-pinned origin), and prints a warning on every run.
 - Trust pins the SPKI SHA-256, not the leaf certificate, so certificate
-  renewals do not break the client. The pin is checked on every authenticated
-  command. A first contact requires interactive `yes` or `--trust-server`; a
-  changed pin is refused until `--trust-server` is given.
+  renewals do not break the client. A first contact requires interactive
+  `yes` or `--trust-server`; a changed pin is refused until `--trust-server`
+  is given.
+- The pin is enforced during every TLS handshake through libcurl's
+  `CURLOPT_PINNEDPUBLICKEY`, not only on the trust probe. A key swapped
+  between the probe and the credential-bearing request aborts the handshake
+  before the request body (password or token) is sent. The captured
+  certificate is also checked again after the transfer as defence in depth.
 - The trust probe is an unauthenticated `GET /api/tool/v1/version`; it must
   answer `200` before the origin is considered. Credentials are read or sent
   only after the trust decision.
@@ -295,10 +300,17 @@ decrypts the records to stdout. Plaintext logs are never written.
 - Tor/I2P are reached through `config set proxy socks5h://127.0.0.1:9050`
   (Tor) or `socks5h://127.0.0.1:4447` (I2P). `socks5h` keeps DNS at the
   proxy. A missing proxy produces `TOR_PROXY_MISSING`/`I2P_PROXY_MISSING`
-  with the exact configuration command to run; a failed resolution produces
-  `TOR_PROXY_FAILED`/`I2P_PROXY_FAILED` with the configured proxy and the
-  conventional address. Only Tor v3 onion names (56 base32 characters) are
-  accepted.
+  with the exact configuration command to run; the check happens before any
+  DNS lookup, so the hidden-service name never reaches the local resolver.
+  A non-`socks5h` proxy is refused with `PROXY_DNS` for hidden services. A
+  failed resolution produces `TOR_PROXY_FAILED`/`I2P_PROXY_FAILED` with the
+  configured proxy and the conventional address. Only Tor v3 onion names
+  (56 base32 characters) are accepted.
+- Routing is explicit: the tool ignores `http_proxy`, `https_proxy`, and
+  `ALL_PROXY` from the environment, and `no_proxy` cannot bypass an
+  explicitly configured proxy. A `.onion` or `.i2p` address without a
+  configured proxy fails instead of being sent to an unexpected proxy or a
+  local resolver.
 - OpSec is the user's responsibility: data can be correlated with the account,
   a malicious server can return poisoned records or a crafted token, and the
   network path does not protect the endpoint or the person.

@@ -76,6 +76,43 @@ std::string hex_encode(const unsigned char *data, size_t len) {
     return out;
 }
 
+int hex_value(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/* libcurl wants "sha256//" followed by the base64 of the SPKI digest. */
+std::string pin_option_for(const std::string &hex) {
+    if (hex.size() != 64) {
+        return {};
+    }
+    unsigned char digest[32];
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        const int high = hex_value(hex[i * 2]);
+        const int low = hex_value(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            return {};
+        }
+        digest[i] = static_cast<unsigned char>((high << 4) | low);
+    }
+    unsigned char encoded[64] = {};
+    const int length =
+        EVP_EncodeBlock(encoded, digest, static_cast<int>(sizeof(digest)));
+    if (length <= 0) {
+        return {};
+    }
+    return "sha256//" + std::string(reinterpret_cast<char *>(encoded),
+                                    static_cast<size_t>(length));
+}
+
 void ensure_curl_global() {
     static std::once_flag once;
     std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
@@ -496,6 +533,15 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
         throw ToolError(ExitCode::Network, "HTTP", "cannot initialize libcurl");
     }
 
+    std::string pin_option;
+    if (parsed.scheme == "https" && !options.pinned_spki_sha256.empty()) {
+        pin_option = pin_option_for(options.pinned_spki_sha256);
+        if (pin_option.empty()) {
+            throw ToolError(ExitCode::Usage, "TRUST_PIN",
+                            "the stored SPKI pin is malformed");
+        }
+    }
+
     HttpResponse response;
     WriteContext write_context{&response.body, false};
     TraceContext trace_context{options.trace_out};
@@ -519,6 +565,9 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     /* Needed for the SPKI pin; CURLINFO_TLS_SSL_PTR is already invalid here
        by the time curl_easy_perform returns. */
     curl_easy_setopt(curl, CURLOPT_CERTINFO, 1L);
+    if (!pin_option.empty()) {
+        curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, pin_option.c_str());
+    }
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &write_context);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
@@ -538,6 +587,8 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     if (!options.proxy.empty()) {
         const Url proxy = parse_url(options.proxy);
         curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
+        /* Do not let no_proxy/NO_PROXY bypass an explicitly configured proxy. */
+        curl_easy_setopt(curl, CURLOPT_NOPROXY, "");
         if (proxy.scheme == "socks5h") {
             curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME);
         } else if (proxy.scheme == "socks5") {
@@ -547,6 +598,11 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
         } else {
             curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
         }
+    } else {
+        /* Routing is explicit: an environment http_proxy/ALL_PROXY must not
+           silently carry this tool's traffic, and a .onion address without a
+           configured proxy must fail rather than leak to a local resolver. */
+        curl_easy_setopt(curl, CURLOPT_PROXY, "");
     }
 
     if (options.trace) {
@@ -557,6 +613,12 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
 
     const CURLcode result = curl_easy_perform(curl);
     if (result != CURLE_OK) {
+        if (result == CURLE_SSL_PINNEDPUBKEYNOTMATCH) {
+            /* The handshake was refused before the request body was sent. */
+            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+                            "server public-key pin did not match; refusing the "
+                            "request");
+        }
         if (write_context.too_large) {
             throw ToolError(ExitCode::Network, "HTTP_TOO_LARGE",
                             "server response is larger than 16 MiB");
@@ -568,6 +630,15 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
 
     if (lower_ascii(parsed.scheme) == "https") {
         capture_certificate(curl, response);
+        /* Defense in depth: libcurl already refused a mismatched key before
+           sending the body, but never return a pinned response without
+           confirming the certificate we parsed. */
+        if (!options.pinned_spki_sha256.empty() &&
+            response.spki_sha256 != options.pinned_spki_sha256) {
+            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+                            "server public-key pin did not match; refusing the "
+                            "response");
+        }
     }
 
     if (options.debug && options.trace_out != nullptr) {

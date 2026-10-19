@@ -17,11 +17,15 @@
 - First-contact SPKI SHA-256 pinning stored in the encrypted vault:
   interactive `yes` pins, `--trust-server` persists non-interactively,
   `--yes` trusts for the current run only, and a changed pin is refused
-  until re-trusted.
+  until re-trusted. The pin is enforced on every TLS handshake, so a key
+  swapped between the trust probe and the credential-bearing request
+  aborts before the password or token is sent.
 - Tor/I2P support: v3 onion validation (56 base32 characters), I2P host
   validation, `config set proxy socks5h://127.0.0.1:9050` /
-  `...:4447`, and actionable `TOR_PROXY_MISSING`/`TOR_PROXY_FAILED`
-  errors when the proxy is absent or cannot resolve the service.
+  `...:4447`, a pre-lookup missing-proxy check that keeps `.onion` names
+  away from the local resolver, a `PROXY_DNS` refusal for non-`socks5h`
+  proxies, and actionable `TOR_PROXY_MISSING`/`TOR_PROXY_FAILED` errors.
+  Environment proxy variables are ignored unless configured explicitly.
 - Redirects are refused, so a `307`/`308` cannot replay the login body to
   another origin.
 

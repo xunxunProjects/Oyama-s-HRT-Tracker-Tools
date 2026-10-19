@@ -2,6 +2,7 @@
 #include "test_framework.h"
 
 #include <cctype>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +20,14 @@
 
 #include <atomic>
 #include <cstring>
+#include <mutex>
 #include <thread>
+
+#include <openssl/ec.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 #endif
 
 namespace {
@@ -84,11 +92,103 @@ std::string read_text(const std::filesystem::path &path) {
 const char *kPasswordLine = "correct horse battery staple\n";
 
 #ifndef _WIN32
-/* Loopback HTTP stub for the live trust flow; POSIX only, like the CLI tests
-   that need real sockets. */
+struct TestCertificate {
+    std::string cert_pem;
+    std::string key_pem;
+};
+
+TestCertificate make_test_certificate(const char *common_name, long serial) {
+    TestCertificate result;
+    EVP_PKEY_CTX *key_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+    EVP_PKEY *key = nullptr;
+    const bool key_ok =
+        key_ctx != nullptr && EVP_PKEY_keygen_init(key_ctx) == 1 &&
+        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(key_ctx,
+                                               NID_X9_62_prime256v1) == 1 &&
+        EVP_PKEY_keygen(key_ctx, &key) == 1;
+    if (!key_ok) {
+        EVP_PKEY_CTX_free(key_ctx);
+        return result;
+    }
+    X509 *cert = X509_new();
+    if (cert != nullptr) {
+        X509_set_version(cert, 2);
+        ASN1_INTEGER_set(X509_get_serialNumber(cert), serial);
+        X509_gmtime_adj(X509_getm_notBefore(cert), -60);
+        X509_gmtime_adj(X509_getm_notAfter(cert), 86400);
+        X509_set_pubkey(cert, key);
+        X509_NAME *name = X509_get_subject_name(cert);
+        X509_NAME_add_entry_by_txt(
+            name, "CN", MBSTRING_ASC,
+            reinterpret_cast<const unsigned char *>(common_name), -1, -1, 0);
+        X509_set_issuer_name(cert, name);
+        if (X509_sign(cert, key, EVP_sha256()) > 0) {
+            BIO *bio = BIO_new(BIO_s_mem());
+            if (bio != nullptr) {
+                PEM_write_bio_X509(bio, cert);
+                char *data = nullptr;
+                const long length = BIO_get_mem_data(bio, &data);
+                result.cert_pem.assign(data, static_cast<size_t>(length));
+                BIO_free(bio);
+            }
+            bio = BIO_new(BIO_s_mem());
+            if (bio != nullptr) {
+                PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr,
+                                         nullptr);
+                char *data = nullptr;
+                const long length = BIO_get_mem_data(bio, &data);
+                result.key_pem.assign(data, static_cast<size_t>(length));
+                BIO_free(bio);
+            }
+        }
+        X509_free(cert);
+    }
+    EVP_PKEY_free(key);
+    EVP_PKEY_CTX_free(key_ctx);
+    return result;
+}
+
+SSL_CTX *make_server_context(const TestCertificate &certificate) {
+    if (certificate.cert_pem.empty() || certificate.key_pem.empty()) {
+        return nullptr;
+    }
+    SSL_CTX *context = SSL_CTX_new(TLS_server_method());
+    if (context == nullptr) {
+        return nullptr;
+    }
+    BIO *cert_bio = BIO_new_mem_buf(certificate.cert_pem.data(),
+                                    static_cast<int>(certificate.cert_pem.size()));
+    X509 *cert = cert_bio == nullptr
+                     ? nullptr
+                     : PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr);
+    BIO_free(cert_bio);
+    BIO *key_bio = BIO_new_mem_buf(certificate.key_pem.data(),
+                                   static_cast<int>(certificate.key_pem.size()));
+    EVP_PKEY *key = key_bio == nullptr
+                        ? nullptr
+                        : PEM_read_bio_PrivateKey(key_bio, nullptr, nullptr, nullptr);
+    BIO_free(key_bio);
+    const bool ok = cert != nullptr && key != nullptr &&
+                    SSL_CTX_use_certificate(context, cert) == 1 &&
+                    SSL_CTX_use_PrivateKey(context, key) == 1;
+    X509_free(cert);
+    EVP_PKEY_free(key);
+    if (!ok) {
+        SSL_CTX_free(context);
+        return nullptr;
+    }
+    return context;
+}
+
+/* Loopback HTTP(S) stub for the live trust flow; POSIX only, like the CLI
+   tests that need real sockets. */
 class LoopbackServer {
 public:
-    LoopbackServer() {
+    explicit LoopbackServer(const TestCertificate *tls = nullptr) {
+        if (tls != nullptr) {
+            context_ = make_server_context(*tls);
+            tls_enabled_ = context_ != nullptr;
+        }
         socket_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (socket_ < 0) {
             return;
@@ -121,15 +221,29 @@ public:
         if (thread_.joinable()) {
             thread_.join();
         }
+        SSL_CTX_free(context_);
     }
 
     LoopbackServer(const LoopbackServer &) = delete;
     LoopbackServer &operator=(const LoopbackServer &) = delete;
 
     bool ok() const { return socket_ >= 0; }
+    bool tls() const { return tls_enabled_; }
     std::string url() const {
-        return "http://127.0.0.1:" + std::to_string(port_);
+        return std::string(tls_enabled_ ? "https" : "http") +
+               "://127.0.0.1:" + std::to_string(port_);
     }
+
+    /* Rotate the certificate after serving this path once, so the next
+       connection in the same command sees a different key. */
+    void rotate_after(const std::string &path,
+                      const TestCertificate &certificate) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rotate_path_ = path;
+        rotate_certificate_ = certificate;
+    }
+
+    int authenticated_requests() const { return authenticated_requests_; }
 
 private:
     void serve() {
@@ -141,19 +255,62 @@ private:
                 }
                 continue;
             }
-            respond(client);
+            SSL_CTX *context = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                context = context_;
+                if (context != nullptr) {
+                    SSL_CTX_up_ref(context);
+                }
+            }
+            if (context != nullptr) {
+                SSL *ssl = SSL_new(context);
+                SSL_CTX_free(context);
+                if (ssl != nullptr) {
+                    SSL_set_fd(ssl, client);
+                    if (SSL_accept(ssl) == 1) {
+                        respond(client, ssl);
+                        SSL_shutdown(ssl);
+                    }
+                    SSL_free(ssl);
+                }
+            } else {
+                respond(client, nullptr);
+            }
             ::close(client);
         }
     }
 
-    static void respond(int client) {
+    static ssize_t read_some(SSL *ssl, int client, char *buffer, size_t size) {
+        return ssl != nullptr ? SSL_read(ssl, buffer, static_cast<int>(size))
+                              : ::recv(client, buffer, size, 0);
+    }
+
+    static void write_all(SSL *ssl, int client, const std::string &data) {
+        size_t offset = 0;
+        while (offset < data.size()) {
+            const int written =
+                ssl != nullptr
+                    ? SSL_write(ssl, data.data() + offset,
+                                static_cast<int>(data.size() - offset))
+                    : static_cast<int>(::send(client, data.data() + offset,
+                                              data.size() - offset,
+                                              MSG_NOSIGNAL));
+            if (written <= 0) {
+                return;
+            }
+            offset += static_cast<size_t>(written);
+        }
+    }
+
+    void respond(int client, SSL *ssl) {
         std::string request;
         char buffer[4096];
         bool headers_done = false;
         size_t header_end = 0;
         size_t content_length = 0;
         while (request.size() < 65536) {
-            const ssize_t got = ::recv(client, buffer, sizeof(buffer), 0);
+            const ssize_t got = read_some(ssl, client, buffer, sizeof(buffer));
             if (got <= 0) {
                 break;
             }
@@ -180,6 +337,15 @@ private:
             if (headers_done && request.size() >= header_end + content_length) {
                 break;
             }
+        }
+
+        std::string lower = request;
+        for (char &c : lower) {
+            c = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (lower.find("\r\nauthorization: bearer") != std::string::npos) {
+            ++authenticated_requests_;
         }
 
         const size_t first_space = request.find(' ');
@@ -215,12 +381,28 @@ private:
             "HTTP/1.1 " + status +
             "\r\nContent-Type: application/json\r\nContent-Length: " +
             std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
-        ::send(client, response.data(), response.size(), MSG_NOSIGNAL);
+        write_all(ssl, client, response);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!rotate_path_.empty() && path == rotate_path_) {
+            SSL_CTX *next = make_server_context(rotate_certificate_);
+            if (next != nullptr) {
+                SSL_CTX_free(context_);
+                context_ = next;
+            }
+            rotate_path_.clear();
+        }
     }
 
     int socket_ = -1;
     unsigned short port_ = 0;
+    bool tls_enabled_ = false;
+    SSL_CTX *context_ = nullptr;
+    std::string rotate_path_;
+    TestCertificate rotate_certificate_;
+    std::atomic<int> authenticated_requests_{0};
     std::atomic<bool> stopping_{false};
+    std::mutex mutex_;
     std::thread thread_;
 };
 #endif
@@ -228,6 +410,11 @@ private:
 } // namespace
 
 int main() {
+#ifndef _WIN32
+    /* A client that aborts a pinned TLS handshake can make the stub's
+       SSL_write hit a closed socket. */
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
     {
         const RunResult result = run({"version"});
         CHECK_EQ(result.code, 0);
@@ -478,7 +665,7 @@ int main() {
             CHECK_EQ(init.code, 0);
 
             const RunResult login = run(
-                {"login", "--server", server.url(), "--username", "Alice",
+                {"login", "--server", server.url() + "/", "--username", "Alice",
                  "--account-password-file", account.string(),
                  "--vault-password-stdin", "--config-dir", temp.path().string()},
                 std::string(kPasswordLine) + "yes\n");
@@ -488,11 +675,17 @@ int main() {
             CHECK(contains(login.out, "Alice"));
 
             /* The interactive yes pins the origin; the next command must not
-               prompt again even though no --trust-server was given. */
+               prompt again even though no --trust-server was given. Proxy
+               environment variables must not be used when no proxy is
+               configured. */
+            ::setenv("ALL_PROXY", "http://127.0.0.1:1", 1);
+            ::setenv("http_proxy", "http://127.0.0.1:1", 1);
             const RunResult whoami = run(
                 {"whoami", "--vault-password-stdin",
                  "--config-dir", temp.path().string()},
                 kPasswordLine);
+            ::unsetenv("ALL_PROXY");
+            ::unsetenv("http_proxy");
             CHECK_EQ(whoami.code, 0);
             CHECK(contains(whoami.out, "Alice"));
             CHECK(!contains(whoami.err, "first contact"));
@@ -503,6 +696,59 @@ int main() {
                 kPasswordLine);
             CHECK_EQ(logout.code, 0);
             CHECK(contains(logout.out, "logged out"));
+        }
+    }
+
+    {
+        const TestCertificate first = make_test_certificate("hrt-test-one", 1);
+        const TestCertificate second = make_test_certificate("hrt-test-two", 2);
+        CHECK(!first.cert_pem.empty());
+        CHECK(!second.cert_pem.empty());
+        LoopbackServer server(&first);
+        CHECK(server.ok());
+        CHECK(server.tls());
+        if (server.ok() && server.tls()) {
+            TempDir temp;
+            const std::filesystem::path account = temp.path() / "account.txt";
+            {
+                std::ofstream out(account);
+                out << "account-password\n";
+            }
+            ::chmod(account.c_str(), 0600);
+            const RunResult init = run(
+                {"init", "--config-dir", temp.path().string(),
+                 "--vault-password-stdin"},
+                kPasswordLine);
+            CHECK_EQ(init.code, 0);
+
+            const RunResult login = run(
+                {"login", "--insecure-tls", "--trust-server", "--server",
+                 server.url(), "--username", "Alice", "--account-password-file",
+                 account.string(), "--vault-password-stdin", "--config-dir",
+                 temp.path().string()},
+                kPasswordLine);
+            CHECK_EQ(login.code, 0);
+            CHECK(contains(login.err, "SPKI SHA-256"));
+
+            /* Serve the trust probe with the pinned key, then swap keys before
+               the authenticated request. The token must never cross the new
+               connection. */
+            server.rotate_after("/api/tool/v1/version", second);
+            const RunResult whoami = run(
+                {"whoami", "--insecure-tls", "--vault-password-stdin",
+                 "--config-dir", temp.path().string()},
+                kPasswordLine);
+            CHECK_EQ(whoami.code, 4);
+            CHECK(contains(whoami.err, "TRUST_CHANGED"));
+            CHECK_EQ(server.authenticated_requests(), 0);
+
+            const RunResult retrust = run(
+                {"whoami", "--insecure-tls", "--trust-server",
+                 "--vault-password-stdin", "--config-dir", temp.path().string()},
+                kPasswordLine);
+            CHECK_EQ(retrust.code, 0);
+            CHECK(contains(retrust.out, "Alice"));
+            CHECK_EQ(server.authenticated_requests(), 1);
         }
     }
 
@@ -544,6 +790,21 @@ int main() {
             kPasswordLine);
         CHECK_EQ(bad_onion.code, 2);
         CHECK(contains(bad_onion.err, "ONION_ADDRESS"));
+
+        /* socks5:// resolves DNS locally, so it must be refused for an onion
+           host before any request is made. */
+        const RunResult set_local_dns = run(
+            {"config", "set", "proxy", "socks5://127.0.0.1:9050",
+             "--vault-password-stdin", "--config-dir", temp.path().string()},
+            kPasswordLine);
+        CHECK_EQ(set_local_dns.code, 0);
+        const RunResult local_dns = run(
+            {"login", "--server", "http://" + onion, "--username", "Alice",
+             "--timeout", "3", "--vault-password-stdin",
+             "--config-dir", temp.path().string()},
+            kPasswordLine);
+        CHECK_EQ(local_dns.code, 2);
+        CHECK(contains(local_dns.err, "PROXY_DNS"));
 
         const RunResult set_proxy = run(
             {"config", "set", "proxy", "socks5h://127.0.0.1:9050",
