@@ -52,6 +52,31 @@ int main() {
     CHECK_THROWS(validate_proxy_url("socks5h://"), ToolError);
 
     {
+        const std::string onion = std::string(56, 'a') + ".onion";
+        CHECK(is_onion_host(onion));
+        CHECK(is_onion_host(std::string(56, 'a') + ".ONION"));
+        CHECK(!is_onion_host("example.com"));
+        CHECK(valid_onion_v3(onion));
+        CHECK(valid_onion_v3(std::string(56, 'A') + ".onion"));
+        CHECK(!valid_onion_v3(std::string(55, 'a') + ".onion"));
+        CHECK(!valid_onion_v3(std::string(57, 'a') + ".onion"));
+        CHECK(!valid_onion_v3(std::string(56, '1') + ".onion"));
+        CHECK(!valid_onion_v3(std::string(56, 'a') + ".i2p"));
+
+        const std::string i2p = "sub.example.i2p";
+        CHECK(is_i2p_host(i2p));
+        CHECK(valid_i2p_host(i2p));
+        CHECK(!valid_i2p_host(std::string(56, 'a') + ".onion"));
+        CHECK(!valid_i2p_host(".i2p"));
+
+        CHECK_EQ(suggested_proxy_for_host(onion),
+                 std::string("socks5h://127.0.0.1:9050"));
+        CHECK_EQ(suggested_proxy_for_host(i2p),
+                 std::string("socks5h://127.0.0.1:4447"));
+        CHECK_EQ(suggested_proxy_for_host("example.com"), std::string());
+    }
+
+    {
         const std::string redacted = redact_header_line("Authorization: Bearer abc");
         CHECK(redacted.find("abc") == std::string::npos);
         CHECK(redacted.find("redacted") != std::string::npos);

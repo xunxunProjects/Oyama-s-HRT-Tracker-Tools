@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — `hrt-tool`
+
+- New `hrt-tool` terminal client, a separate codebase from `hrt-cold`:
+  C11 crypto core, C++17 CLI, and Rust printer.
+- Encrypted vault (PBKDF2-SHA256 600k, AES-256-GCM, mode 0600, atomic
+  writes) with a master-password entropy gate (>= 40 bits under both the
+  website model and the uniform model).
+- Encrypted, length-framed log records; plaintext logs are never written.
+- Local commands: `look`, `add`, `dose`, `lab`, `weight`, `export`,
+  `import`, with PK concentration modelling, cloud-snapshot decryption,
+  merge/tombstone semantics, and encrypted `HRTE` exports.
+- Live `/api/tool/v1` client: `login`, `logout`, `whoami`,
+  `snapshot pull|push|list`, remote `look`, with origin-bound tokens,
+  conditional snapshot writes, and conflict retry.
+- First-contact SPKI SHA-256 pinning stored in the encrypted vault:
+  interactive `yes` pins, `--trust-server` persists non-interactively,
+  `--yes` trusts for the current run only, and a changed pin is refused
+  until re-trusted.
+- Tor/I2P support: v3 onion validation (56 base32 characters), I2P host
+  validation, `config set proxy socks5h://127.0.0.1:9050` /
+  `...:4447`, and actionable `TOR_PROXY_MISSING`/`TOR_PROXY_FAILED`
+  errors when the proxy is absent or cannot resolve the service.
+- Redirects are refused, so a `307`/`308` cannot replay the login body to
+  another origin.
+
 ## 0.1.0 — 2026-10-19 (pre-release)
 
 Initial independent release of Oyama HRT Tracker Tools.

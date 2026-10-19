@@ -21,7 +21,18 @@ struct HttpResponse {
     std::string body;
     std::multimap<std::string, std::string> headers;
     std::string spki_sha256;
+    std::string cert_subject;
+    std::string cert_issuer;
+    std::string cert_not_before;
+    std::string cert_not_after;
 };
+
+bool is_onion_host(const std::string &host);
+bool is_i2p_host(const std::string &host);
+bool valid_onion_v3(const std::string &host);
+bool valid_i2p_host(const std::string &host);
+/* The conventional local proxy for this hidden-service suffix, or empty. */
+std::string suggested_proxy_for_host(const std::string &host);
 
 struct HttpOptions {
     std::string proxy;

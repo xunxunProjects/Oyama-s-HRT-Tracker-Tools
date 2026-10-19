@@ -185,6 +185,9 @@ void print_help(std::ostream &out) {
         << "  weight ...           manage weight\n"
         << "  export               export data\n"
         << "  import               import data\n"
+        << "  config get [KEY]     show server, proxy, transport, compute\n"
+        << "  config set KEY VALUE change server or proxy\n"
+        << "  config unset KEY     clear server or proxy\n"
         << "  config path          print config paths\n"
         << "  logs show            decrypt an encrypted log file\n"
         << "  version              print versions\n\n"
@@ -201,6 +204,15 @@ void print_help(std::ostream &out) {
         << "  snapshot pull --out FILE [--id ID] [--force]\n"
         << "  snapshot push --in FILE\n"
         << "  look --all  --at OFFSETS  --labs N  --json\n\n"
+        << "Trust:\n"
+        << "  On first contact the certificate and SPKI SHA-256 are shown.\n"
+        << "  Type 'yes' to trust and pin, or use --trust-server to persist the\n"
+        << "  decision non-interactively. --yes trusts for the current run only.\n"
+        << "  A changed pin is refused until --trust-server is given.\n\n"
+        << "Tor/I2P:\n"
+        << "  Tor: hrt-tool config set proxy socks5h://127.0.0.1:9050\n"
+        << "  I2P: hrt-tool config set proxy socks5h://127.0.0.1:4447\n"
+        << "  .onion host names are v3: 56 base32 characters plus .onion.\n\n"
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
 

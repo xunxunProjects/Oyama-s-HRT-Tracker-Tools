@@ -11,8 +11,10 @@
 #include <string>
 
 #include <curl/curl.h>
+#include <openssl/asn1.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
@@ -138,28 +140,104 @@ int debug_callback(CURL *, curl_infotype type, char *data, size_t size, void *us
     return 0;
 }
 
-std::string spki_sha256(SSL *ssl) {
-    X509 *certificate = SSL_get_peer_certificate(ssl);
-    if (certificate == nullptr) {
+std::string x509_name_string(X509_NAME *name) {
+    if (name == nullptr) {
+        return {};
+    }
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == nullptr) {
         return {};
     }
     std::string result;
-    X509_PUBKEY *public_key = X509_get_X509_PUBKEY(certificate);
-    if (public_key != nullptr) {
-        unsigned char *der = nullptr;
-        const int der_len = i2d_X509_PUBKEY(public_key, &der);
-        if (der_len > 0 && der != nullptr) {
-            unsigned char digest[EVP_MAX_MD_SIZE];
-            unsigned int digest_len = 0;
-            if (EVP_Digest(der, static_cast<size_t>(der_len), digest, &digest_len,
-                           EVP_sha256(), nullptr) == 1) {
-                result = hex_encode(digest, digest_len);
-            }
+    if (X509_NAME_print_ex(bio, name, 0, XN_FLAG_RFC2253) >= 0) {
+        char *data = nullptr;
+        const long length = BIO_get_mem_data(bio, &data);
+        if (length > 0 && data != nullptr) {
+            result.assign(data, static_cast<size_t>(length));
         }
-        OPENSSL_free(der);
     }
-    X509_free(certificate);
+    BIO_free(bio);
     return result;
+}
+
+std::string asn1_time_string(const ASN1_TIME *time) {
+    if (time == nullptr) {
+        return {};
+    }
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == nullptr) {
+        return {};
+    }
+    std::string result;
+    if (ASN1_TIME_print(bio, time) == 1) {
+        char *data = nullptr;
+        const long length = BIO_get_mem_data(bio, &data);
+        if (length > 0 && data != nullptr) {
+            result.assign(data, static_cast<size_t>(length));
+        }
+    }
+    BIO_free(bio);
+    return result;
+}
+
+std::string cert_field(const curl_slist *fields, const std::string &name) {
+    const std::string prefix = name + ":";
+    for (const curl_slist *item = fields; item != nullptr; item = item->next) {
+        if (std::strncmp(item->data, prefix.c_str(), prefix.size()) == 0) {
+            return std::string(item->data + prefix.size());
+        }
+    }
+    return {};
+}
+
+/*
+ * libcurl invalidates CURLINFO_TLS_SSL_PTR once curl_easy_perform returns, so
+ * the peer certificate is taken from CURLINFO_CERTINFO instead and parsed by
+ * OpenSSL. The first entry that carries a PEM certificate is the leaf.
+ */
+void capture_certificate(CURL *curl, HttpResponse &response) {
+    struct curl_certinfo *info = nullptr;
+    if (curl_easy_getinfo(curl, CURLINFO_CERTINFO, &info) != CURLE_OK ||
+        info == nullptr) {
+        return;
+    }
+    for (int i = 0; i < info->num_of_certs; ++i) {
+        const std::string pem = cert_field(info->certinfo[i], "Cert");
+        if (pem.empty()) {
+            continue;
+        }
+        BIO *bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
+        if (bio == nullptr) {
+            return;
+        }
+        X509 *certificate = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+        BIO_free(bio);
+        if (certificate == nullptr) {
+            continue;
+        }
+        response.cert_subject = x509_name_string(X509_get_subject_name(certificate));
+        response.cert_issuer = x509_name_string(X509_get_issuer_name(certificate));
+        response.cert_not_before =
+            asn1_time_string(X509_get0_notBefore(certificate));
+        response.cert_not_after = asn1_time_string(X509_get0_notAfter(certificate));
+
+        X509_PUBKEY *public_key = X509_get_X509_PUBKEY(certificate);
+        if (public_key != nullptr) {
+            unsigned char *der = nullptr;
+            const int der_len = i2d_X509_PUBKEY(public_key, &der);
+            if (der_len > 0 && der != nullptr) {
+                unsigned char digest[EVP_MAX_MD_SIZE];
+                unsigned int digest_len = 0;
+                if (EVP_Digest(der, static_cast<size_t>(der_len), digest,
+                               &digest_len, EVP_sha256(), nullptr) == 1) {
+                    response.spki_sha256 = hex_encode(digest, digest_len);
+                }
+            }
+            OPENSSL_free(der);
+        }
+        X509_free(certificate);
+        return;
+    }
 }
 
 struct CurlCleanup {
@@ -295,6 +373,55 @@ void validate_proxy_url(const std::string &proxy) {
     }
 }
 
+bool is_onion_host(const std::string &host) {
+    const std::string name = lower_ascii(host);
+    return name.size() > 6 && name.compare(name.size() - 6, 6, ".onion") == 0;
+}
+
+bool is_i2p_host(const std::string &host) {
+    const std::string name = lower_ascii(host);
+    return name.size() > 4 && name.compare(name.size() - 4, 4, ".i2p") == 0;
+}
+
+bool valid_onion_v3(const std::string &host) {
+    const std::string name = lower_ascii(host);
+    if (!is_onion_host(name)) {
+        return false;
+    }
+    const std::string label = name.substr(0, name.size() - 6);
+    if (label.size() != 56) {
+        return false;
+    }
+    return std::all_of(label.begin(), label.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '2' && c <= '7');
+    });
+}
+
+bool valid_i2p_host(const std::string &host) {
+    const std::string name = lower_ascii(host);
+    if (!is_i2p_host(name)) {
+        return false;
+    }
+    const std::string label = name.substr(0, name.size() - 4);
+    if (label.empty() || label.size() > 255) {
+        return false;
+    }
+    return std::all_of(label.begin(), label.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' ||
+               c == '-' || c == '_';
+    });
+}
+
+std::string suggested_proxy_for_host(const std::string &host) {
+    if (is_onion_host(host)) {
+        return "socks5h://127.0.0.1:9050";
+    }
+    if (is_i2p_host(host)) {
+        return "socks5h://127.0.0.1:4447";
+    }
+    return {};
+}
+
 std::string redact_header_line(const std::string &header_line) {
     const std::string::size_type colon = header_line.find(':');
     if (colon == std::string::npos) {
@@ -389,6 +516,9 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, options.insecure_tls ? 0L : 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, options.insecure_tls ? 0L : 2L);
+    /* Needed for the SPKI pin; CURLINFO_TLS_SSL_PTR is already invalid here
+       by the time curl_easy_perform returns. */
+    curl_easy_setopt(curl, CURLOPT_CERTINFO, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &write_context);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
@@ -436,10 +566,8 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
 
-    struct curl_tlssessioninfo *tls = nullptr;
-    if (curl_easy_getinfo(curl, CURLINFO_TLS_SSL_PTR, &tls) == CURLE_OK && tls != nullptr &&
-        tls->internals != nullptr && tls->backend == CURLSSLBACKEND_OPENSSL) {
-        response.spki_sha256 = spki_sha256(static_cast<SSL *>(tls->internals));
+    if (lower_ascii(parsed.scheme) == "https") {
+        capture_certificate(curl, response);
     }
 
     if (options.debug && options.trace_out != nullptr) {

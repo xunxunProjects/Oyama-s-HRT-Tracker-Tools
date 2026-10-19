@@ -4,16 +4,17 @@
 project. It is a separate codebase from [`hrt-cold`](../hrt-cold/README.md):
 different language, build, CI job, and release artifact.
 
-**Status: live client (M3 wiring).** Implemented: the encrypted local vault,
-the master-password entropy gate, encrypted debug logs, the CLI surface,
-URL/proxy policy, the SPKI trust-store state machine, the libcurl transport,
-the live `/api/tool/v1/*` client, the C PK engine (31 reference scenarios),
-cloud-snapshot decryption, sync-payload merge/tombstones, encrypted `HRTE`
-exports, the complete-backup envelope, the Rust printer, the local
-`look`/`add`/`dose`/`lab`/`weight`/`export`/`import` commands, and
-`login`/`logout`/`whoami`/`snapshot pull|push|list`. Still to come: the
-first-contact SPKI prompts, Tor/I2P trust decisions, and the optional
-transport envelope (M4).
+**Status: M4 trust and proxy wiring.** Implemented: the encrypted local
+vault, the master-password entropy gate, encrypted debug logs, the CLI
+surface, URL/proxy policy, the libcurl transport, first-contact SPKI
+trust prompts with pin enforcement, Tor/I2P address policy and proxy
+guidance, the live `/api/tool/v1/*` client, the C PK engine (31 reference
+scenarios), cloud-snapshot decryption, sync-payload merge/tombstones,
+encrypted `HRTE` exports, the complete-backup envelope, the Rust printer,
+the local `look`/`add`/`dose`/`lab`/`weight`/`export`/`import` commands,
+`login`/`logout`/`whoami`/`snapshot pull|push|list`, and
+`config get|set|unset`. Still to come: the optional transport envelope,
+calibration, and the GPG F2F mode.
 
 ## Build
 
@@ -65,12 +66,12 @@ command-line arguments are never used for secrets.
 | Command | Status |
 | --- | --- |
 | `version` | Implemented: tool, C core, and Rust printer versions. |
-| `init [--reset]`, `config path`, `logs show --log-file FILE` | Implemented. |
+| `init [--reset]`, `config get\|set\|unset\|path`, `logs show --log-file FILE` | Implemented. |
 | `look` | Implemented; without `--snapshot` it pulls and decrypts the newest revision, otherwise it reads the file. |
 | `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot`. |
-| `login`, `logout`, `whoami` | Implemented against `/api/tool/v1`; the first-contact SPKI prompt is M4. |
+| `login`, `logout`, `whoami` | Implemented against `/api/tool/v1`, with first-contact SPKI trust prompts. |
 | `snapshot pull`, `snapshot push`, `snapshot list` | Implemented; pull writes an encrypted local snapshot, push merges and retries on `409`. |
-| `config get`, `config set`, `logs <other>` | Stub; exit `6`. |
+| `logs <other>` | Stub; exit `6`. |
 
 ### Local snapshot workflow (M2)
 
@@ -158,10 +159,43 @@ origin: passing a different `--server` to an authenticated command is refused
 with `SERVER_MISMATCH`; run `login --server NEW` to switch (which clears the old
 origin's token and device pass). `--no-cache-cloud-key` keeps the derived key out
 of the vault on that command; pass it to every command that may derive the key,
-or the first `pull`/`look` will cache it. The first-contact
-SPKI prompt and Tor/I2P trust decisions are still M4 work: until then, use
-`--server http://127.0.0.1:PORT` only for local testing and an HTTPS origin for
-anything remote.
+or the first `pull`/`look` will cache it.
+
+### Trust, Tor, and I2P (M4)
+
+Before an authenticated command talks to a server, it fetches
+`/api/tool/v1/version` without credentials and decides whether to trust that
+origin. On first contact it prints the scheme/host/port, the certificate
+subject, issuer, validity, and the SPKI SHA-256, then asks for `yes`.
+`--trust-server` persists the decision without prompting; `--yes` accepts the
+origin for the current run only and never silently pins a new or changed key.
+The pin is stored in the encrypted vault under the origin's `host:port`. Trust
+details and the prompt go to stderr, so `--json` output on stdout stays
+machine-readable.
+
+A changed SPKI is refused with `TRUST_CHANGED` until `--trust-server` is given
+again. Onion and I2P origins always show a stronger warning. Plain `http://`
+prints a warning on every run; it is allowed only for loopback, `.onion`, and
+`.i2p` hosts. `--insecure-tls` prints a warning on every run as well.
+
+```sh
+# Tell the tool how to reach Tor and I2P, once. socks5h keeps DNS at the proxy.
+hrt-tool config set proxy socks5h://127.0.0.1:9050   # Tor
+hrt-tool config set proxy socks5h://127.0.0.1:4447   # I2P
+
+hrt-tool config get proxy
+hrt-tool config unset proxy
+
+# Tor v3 addresses are exactly 56 base32 characters plus .onion.
+hrt-tool login --server http://<56-character-v3-address>.onion --username alice \
+  --account-password-file account.txt
+```
+
+A `.onion` or `.i2p` address with no proxy configured fails with
+`TOR_PROXY_MISSING`/`I2P_PROXY_MISSING` and prints the command to run. When a
+proxy is configured but the hidden service cannot be resolved, the error names
+the proxy and suggests re-running `config set proxy` with the conventional
+address (`9050` for Tor, `4447` for I2P).
 
 The `look` numbers are the uncalibrated baseline: the website's EKF/OU/MIPD
 calibration is not ported yet, and `look` prints a warning saying so.
@@ -208,9 +242,9 @@ The log key is `HKDF-SHA256(vault_key, "hrt-tool-log-v1", 32)`.
 
 ## Encrypted logs
 
-`--debug`/`--trace` are parsed; in M1 `--debug` prints a short stub line to
-stderr. Transport and TLS diagnostics require the live client and land in M4.
-With `--log-file FILE`, each record is:
+`--debug`/`--trace` enable transport and TLS diagnostics on stderr; request
+and response headers are redacted before printing. Diagnostics are never
+written to disk in plaintext. With `--log-file FILE`, each record is:
 
 ```text
 u32 payload_len | u64 timestamp_ms | 12-byte nonce | AES-256-GCM ciphertext+tag
@@ -243,21 +277,28 @@ decrypts the records to stdout. Plaintext logs are never written.
 - The tool does not call `system`, `popen`, `exec`, `dlopen`, or a shell, and
   never executes or evaluates server-provided content. Server strings are data.
 - HTTPS is required for ordinary remote servers. Plain `http://` is accepted
-  only for loopback, `.onion`, and `.i2p` hosts (policy), and the M4 trust
-  prompt will require an explicit decision before first contact.
+  only for loopback, `.onion`, and `.i2p` hosts, requires an explicit trust
+  decision (or an already-pinned origin), and prints a warning on every run.
 - Trust pins the SPKI SHA-256, not the leaf certificate, so certificate
-  renewals do not break the client. M1 implements the trust-store state
-  machine; live pin enforcement lands with the real client in M4.
+  renewals do not break the client. The pin is checked on every authenticated
+  command. A first contact requires interactive `yes` or `--trust-server`; a
+  changed pin is refused until `--trust-server` is given.
+- The trust probe is an unauthenticated `GET /api/tool/v1/version`; it must
+  answer `200` before the origin is considered. Credentials are read or sent
+  only after the trust decision.
 - Redirects are not followed. A `3xx` is a typed error, so a `307`/`308`
-  cannot re-send the login body (the account password) to another host. M4 may
-  add a loop that re-validates the URL policy and trust pin on every hop.
-- `logs show` requires `--log-file FILE` in M1; a default log location in the
-  encrypted vault is M4 work.
+  cannot re-send the login body (the account password) to another host.
+- `logs show` requires `--log-file FILE`; no default log location is written.
 - Windows relies on NTFS ACLs rather than Unix mode bits; the Windows build
-  and ACL verification are M4 work, and the Windows vault write is not yet
-  crash-durable (`fsync` is POSIX-only here).
-- Tor/I2P are reached through `--proxy socks5h://127.0.0.1:9050` (Tor) or
-  `socks5h://127.0.0.1:4447` (I2P). `socks5h` keeps DNS at the proxy.
+  and ACL verification are still pending, and the Windows vault write is not
+  yet crash-durable (`fsync` is POSIX-only here).
+- Tor/I2P are reached through `config set proxy socks5h://127.0.0.1:9050`
+  (Tor) or `socks5h://127.0.0.1:4447` (I2P). `socks5h` keeps DNS at the
+  proxy. A missing proxy produces `TOR_PROXY_MISSING`/`I2P_PROXY_MISSING`
+  with the exact configuration command to run; a failed resolution produces
+  `TOR_PROXY_FAILED`/`I2P_PROXY_FAILED` with the configured proxy and the
+  conventional address. Only Tor v3 onion names (56 base32 characters) are
+  accepted.
 - OpSec is the user's responsibility: data can be correlated with the account,
   a malicious server can return poisoned records or a crafted token, and the
   network path does not protect the endpoint or the person.
@@ -299,9 +340,11 @@ pairing order and the open-list removal semantics are pinned to `logic.ts`.
   `look`/`add`/`dose`/`lab`/`weight`/`export`/`import`.
 - **M3 (implemented):** `/api/tool/v1/*` in the website worker (PRs #133/#134)
   and the live client: `login`, `logout`, `whoami`, `snapshot pull|push|list`.
-- **M4:** first-contact SPKI trust prompts, Tor/I2P trust decisions, the
-  optional encrypted request envelope, and integration tests against local
-  `wrangler dev`.
+- **M4 (trust/proxy implemented):** first-contact SPKI trust prompts, pin
+  enforcement, `config get|set|unset`, Tor/I2P v3 address policy, proxy
+  configuration and failure guidance, and integration tests against a
+  loopback API (the full live client was exercised against local
+  `wrangler dev` in M3). The optional encrypted request envelope remains.
 - Later: calibration (EKF/OU/MIPD), optional server compute, and the GPG F2F
   advanced mode.
 

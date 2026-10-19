@@ -11,6 +11,7 @@
 #include "paths.h"
 #include "prompt.h"
 #include "snapshot.h"
+#include "trust.h"
 #include "vault.h"
 #include "version.h"
 
@@ -251,6 +252,164 @@ std::string authenticated_server(const ParsedArgs &parsed, const VaultData &data
     return saved;
 }
 
+void validate_hidden_service_host(const Url &url) {
+    if (is_onion_host(url.host) && !valid_onion_v3(url.host)) {
+        throw ToolError(ExitCode::Usage, "ONION_ADDRESS",
+                        "a Tor v3 onion address is 56 base32 characters followed by .onion");
+    }
+    if (is_i2p_host(url.host) && !valid_i2p_host(url.host)) {
+        throw ToolError(ExitCode::Usage, "I2P_ADDRESS",
+                        "invalid I2P host name");
+    }
+}
+
+void ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
+                  std::istream &in, std::ostream &err,
+                  const std::string &server) {
+    const Url parsed_url = parse_url(server);
+    validate_server_url(parsed_url);
+    validate_hidden_service_host(parsed_url);
+    const bool onion = is_onion_host(parsed_url.host);
+    const bool i2p = is_i2p_host(parsed_url.host);
+
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpClient client;
+    HttpResponse response;
+    try {
+        response = client.request("GET", server + "/api/tool/v1/version",
+                                  {"Accept: application/json"}, "", http);
+    } catch (const ToolError &error) {
+        if (onion || i2p) {
+            const std::string suggested = suggested_proxy_for_host(parsed_url.host);
+            const std::string network = onion ? "Tor" : "I2P";
+            if (http.proxy.empty()) {
+                throw ToolError(
+                    ExitCode::Network,
+                    onion ? "TOR_PROXY_MISSING" : "I2P_PROXY_MISSING",
+                    std::string("this is a ") + network +
+                        " address but no " + network +
+                        " proxy is configured. Run: hrt-tool config set proxy " +
+                        suggested);
+            }
+            throw ToolError(
+                ExitCode::Network,
+                onion ? "TOR_PROXY_FAILED" : "I2P_PROXY_FAILED",
+                std::string("could not resolve ") + parsed_url.host +
+                    " through the " + network + " proxy " + http.proxy +
+                    ". Check that " + network +
+                    " is running; reconfigure with: hrt-tool config set proxy " +
+                    suggested + " (underlying error: " + error.what() + ")");
+        }
+        throw;
+    }
+    if (response.status != 200) {
+        throw ToolError(ExitCode::Network, "SERVER_PROBE",
+                        "the server did not answer the version probe (HTTP " +
+                            std::to_string(response.status) + ")");
+    }
+
+    const bool tls = lower_ascii(parsed_url.scheme) == "https";
+    if (tls && response.spki_sha256.empty()) {
+        throw ToolError(ExitCode::Network, "TRUST_NO_PIN",
+                        "could not compute the server public-key pin");
+    }
+    const std::string pin = tls ? response.spki_sha256 : "none";
+    const std::string origin = normalized_origin(server);
+    TrustStore store(unlocked.session.data.trust);
+    const TrustState state = store.check(origin, pin);
+
+    if (parsed.options.insecure_tls && tls) {
+        err << "warning: TLS certificate verification is disabled for this run\n";
+    }
+    if (!tls) {
+        err << "warning: plain HTTP to " << origin
+            << (onion || i2p
+                    ? "; transport privacy comes only from the "
+                      "hidden-service network, not from TLS\n"
+                    : "; traffic is not encrypted on this network path\n");
+    }
+
+    if (state == TrustState::Trusted) {
+        return;
+    }
+
+    if (state == TrustState::Changed) {
+        err << "warning: the pinned key for " << origin
+            << " changed. This can mean a machine-in-the-middle or a server key "
+               "rotation.\n";
+        if (!parsed.options.trust_server) {
+            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+                            "refusing the changed key; re-trust explicitly with "
+                            "--trust-server");
+        }
+    } else {
+        err << "first contact with " << origin << "\n";
+        if (tls) {
+            err << "  certificate subject: "
+                << (response.cert_subject.empty() ? "(unavailable)"
+                                                  : response.cert_subject)
+                << "\n";
+            err << "  issuer: "
+                << (response.cert_issuer.empty() ? "(unavailable)"
+                                                 : response.cert_issuer)
+                << "\n";
+            err << "  valid: " << response.cert_not_before << " .. "
+                << response.cert_not_after << "\n";
+            err << "  SPKI SHA-256: " << pin << "\n";
+        } else {
+            err << "  transport: plain HTTP (no certificate)\n";
+        }
+        if (lower_ascii(http.proxy).find("socks5h://") == 0) {
+            err << "  DNS: resolved by the proxy\n";
+        }
+        if (onion) {
+            err << "warning: this is a Tor onion service. Anyone can publish an "
+                   "onion address; verify it out of band before entering "
+                   "credentials. The address can change hands.\n";
+        }
+        if (i2p) {
+            err << "warning: this is an I2P service. Verify the destination out "
+                   "of band before entering credentials.\n";
+        }
+    }
+
+    bool persist = false;
+    bool accepted = false;
+    if (parsed.options.trust_server) {
+        accepted = true;
+        persist = true;
+    } else if (parsed.options.yes) {
+        accepted = true;
+        err << "warning: trusting " << origin
+            << " for this run only (--yes)\n";
+    } else {
+        err << "Trust this server? Type 'yes' to continue: ";
+        err.flush();
+        std::string answer;
+        if (!std::getline(in, answer)) {
+            throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+                            "server was not trusted");
+        }
+        if (!answer.empty() && answer.back() == '\r') {
+            answer.pop_back();
+        }
+        accepted = answer == "yes";
+        persist = accepted;
+    }
+    if (!accepted) {
+        throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+                        "server was not trusted");
+    }
+
+    if (persist) {
+        store.trust(origin, pin);
+        unlocked.session.data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        err << "trusted and pinned " << origin << "\n";
+    }
+}
+
 std::array<uint8_t, 32> cloud_key_for(UnlockedVault &unlocked,
                                      const ParsedArgs &parsed, std::istream &in,
                                      std::ostream &out) {
@@ -313,8 +472,10 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                   std::ostream &err) {
     UnlockedVault unlocked = unlock_full(parsed.options, in, out);
     const std::string username = read_username(parsed, in, out);
-    const std::string password = read_account_password(parsed.options, in, out);
     const std::string server = server_for(parsed, unlocked.session.data);
+    /* Decide trust before the account password is typed or sent. */
+    ensure_trust(unlocked, parsed, in, err, server);
+    const std::string password = read_account_password(parsed.options, in, out);
     /* A device pass is a credential for one server; never send a cached one
        to a different origin. */
     const std::string device_pass =
@@ -395,14 +556,16 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         const std::string saved = unlocked.session.data.server.empty()
                                       ? parsed.options.server
                                       : unlocked.session.data.server;
-        std::unique_ptr<ApiClient> client = make_api_client(
-            saved, http_options_for(parsed, unlocked.session.data, err),
-            unlocked.session.data.token);
         try {
+            ensure_trust(unlocked, parsed, in, err, saved);
+            std::unique_ptr<ApiClient> client = make_api_client(
+                saved, http_options_for(parsed, unlocked.session.data, err),
+                unlocked.session.data.token);
             client->logout();
         } catch (const ToolError &error) {
             /* Revocation is best effort; local secrets are cleared either
-               way so a network failure cannot leave a usable token on disk. */
+               way so a network or trust failure cannot leave a usable token
+               on disk. */
             warning = error.what();
         }
     }
@@ -431,8 +594,10 @@ int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out
     if (unlocked.session.data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
+    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    ensure_trust(unlocked, parsed, in, err, server);
     std::unique_ptr<ApiClient> client = make_api_client(
-        authenticated_server(parsed, unlocked.session.data), http_options_for(parsed, unlocked.session.data, err),
+        server, http_options_for(parsed, unlocked.session.data, err),
         unlocked.session.data.token);
     const nlohmann::json me = client->me();
     if (parsed.options.json) {
@@ -453,8 +618,10 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
     if (unlocked.session.data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
+    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    ensure_trust(unlocked, parsed, in, err, server);
     std::unique_ptr<ApiClient> client = make_api_client(
-        authenticated_server(parsed, unlocked.session.data), http_options_for(parsed, unlocked.session.data, err),
+        server, http_options_for(parsed, unlocked.session.data, err),
         unlocked.session.data.token);
     std::optional<Snapshot> snapshot = client->latest_snapshot();
     if (!snapshot.has_value()) {
@@ -494,8 +661,10 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
     if (unlocked.session.data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
+    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    ensure_trust(unlocked, parsed, in, err, server);
     std::unique_ptr<ApiClient> client = make_api_client(
-        authenticated_server(parsed, unlocked.session.data), http_options_for(parsed, unlocked.session.data, err),
+        server, http_options_for(parsed, unlocked.session.data, err),
         unlocked.session.data.token);
 
     if (sub == "list") {
@@ -679,6 +848,91 @@ int command_init(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     (void)session;
     out << "vault created: " << paths.vault_file.string() << "\n";
     return 0;
+}
+
+int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                   std::ostream &err) {
+    if (parsed.command_args.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "config needs get, set, unset, or path");
+    }
+    const std::string sub = parsed.command_args.front();
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+
+    if (sub == "get") {
+        const std::string key =
+            parsed.command_args.size() > 1 ? parsed.command_args[1] : "";
+        if (key.empty() || key == "server") {
+            out << "server: " << unlocked.session.data.server << "\n";
+        }
+        if (key.empty() || key == "proxy") {
+            out << "proxy: "
+                << (unlocked.session.data.proxy.empty() ? "(none)"
+                                                        : unlocked.session.data.proxy)
+                << "\n";
+        }
+        if (key.empty() || key == "transport") {
+            out << "transport: tls\n";
+        }
+        if (key.empty() || key == "compute") {
+            out << "compute: local\n";
+        }
+        if (!key.empty() && key != "server" && key != "proxy" &&
+            key != "transport" && key != "compute") {
+            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
+        }
+        return 0;
+    }
+
+    if (sub == "set" || sub == "unset") {
+        const std::string key =
+            parsed.command_args.size() > 1 ? parsed.command_args[1] : "";
+        const std::string value =
+            parsed.command_args.size() > 2 ? parsed.command_args[2] : "";
+        if (key.empty()) {
+            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "missing config key");
+        }
+        if (sub == "set" && value.empty()) {
+            throw ToolError(ExitCode::Usage, "CONFIG_VALUE", "missing value");
+        }
+        if (key == "proxy") {
+            if (sub == "unset") {
+                unlocked.session.data.proxy.clear();
+                out << "proxy unset\n";
+            } else {
+                validate_proxy_url(value);
+                unlocked.session.data.proxy = value;
+                out << "proxy set: " << value << "\n";
+            }
+        } else if (key == "server") {
+            const std::string next =
+                sub == "unset" ? "https://hrt.mahiro.uk" : value;
+            const Url next_url = parse_url(next);
+            validate_server_url(next_url);
+            validate_hidden_service_host(next_url);
+            if (!unlocked.session.data.server.empty() &&
+                !same_origin(next, unlocked.session.data.server)) {
+                unlocked.session.data.token.clear();
+                unlocked.session.data.cloud_key.clear();
+                unlocked.session.data.device_pass.clear();
+                err << "warning: server changed; the saved session was cleared\n";
+            }
+            unlocked.session.data.server = next;
+            out << "server set: " << next << "\n";
+        } else if (key == "transport" || key == "compute") {
+            throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
+                            key + " cannot be changed until M4 is complete");
+        } else {
+            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
+        }
+        unlocked.session.data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        return 0;
+    }
+
+    throw ToolError(ExitCode::Usage, "USAGE",
+                    "config needs get, set, unset, or path");
 }
 
 int command_config_path(const ParsedArgs &parsed, std::ostream &out) {
@@ -868,9 +1122,7 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         if (!parsed.command_args.empty() && parsed.command_args.front() == "path") {
             return command_config_path(parsed, out);
         }
-        const std::string name =
-            parsed.command_args.empty() ? "config" : "config " + parsed.command_args.front();
-        return command_stub(name, parsed, in, out, err);
+        return command_config(parsed, in, out, err);
     }
     if (parsed.command == "logs") {
         if (!parsed.command_args.empty() && parsed.command_args.front() == "show") {
