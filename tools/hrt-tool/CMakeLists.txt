@@ -46,6 +46,7 @@ add_library(hrtcpp STATIC
     src/paths.cpp
     src/pk.cpp
     src/prompt.cpp
+    src/snapshot.cpp
     src/trust.cpp
     src/vault.cpp
     src/version.cpp
@@ -119,4 +120,10 @@ if(BUILD_TESTING)
     add_executable(model_test tests/model_test.cpp)
     target_link_libraries(model_test PRIVATE hrtcpp)
     add_test(NAME model COMMAND model_test)
+
+    add_executable(snapshot_test tests/snapshot_test.cpp)
+    target_link_libraries(snapshot_test PRIVATE hrtcpp)
+    target_compile_definitions(snapshot_test PRIVATE
+        HRT_TOOL_TESTDATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+    add_test(NAME snapshot COMMAND snapshot_test)
 endif()

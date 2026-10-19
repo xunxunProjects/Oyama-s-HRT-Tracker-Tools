@@ -24,6 +24,9 @@ struct GlobalOptions {
     std::string vault_password_file;
     bool vault_password_stdin = false;
     std::string log_file;
+    std::string user_id;
+    std::string account_password_file;
+    bool account_password_stdin = false;
 };
 
 struct ParsedArgs {
@@ -37,3 +40,6 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out, std:
 
 std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                                 std::ostream &out, bool confirm);
+
+std::string read_account_password(const GlobalOptions &options, std::istream &in,
+                                  std::ostream &out);

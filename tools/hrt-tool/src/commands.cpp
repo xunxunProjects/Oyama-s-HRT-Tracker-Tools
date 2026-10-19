@@ -193,6 +193,49 @@ std::string read_vault_password(const GlobalOptions &options, std::istream &in,
     return read_password(in, out, "Master password: ", confirm, true);
 }
 
+std::string read_account_password(const GlobalOptions &options, std::istream &in,
+                                  std::ostream &out) {
+    if (!options.account_password_file.empty()) {
+#ifndef _WIN32
+        struct stat info {};
+        if (::stat(options.account_password_file.c_str(), &info) != 0) {
+            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD_FILE",
+                            "cannot stat the account password file");
+        }
+        if ((info.st_mode & 0077) != 0) {
+            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD_PERMISSIONS",
+                            "account password file must be mode 0600");
+        }
+#endif
+        std::error_code size_error;
+        const auto size =
+            std::filesystem::file_size(options.account_password_file, size_error);
+        if (!size_error && size > kMaxMasterPasswordBytes + 2) {
+            throw ToolLimitError("account password file exceeds 256 bytes");
+        }
+        std::ifstream file(options.account_password_file);
+        if (!file) {
+            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD_FILE",
+                            "cannot read the account password file");
+        }
+        const std::string password = read_password_line(file, kMaxMasterPasswordBytes);
+        if (password.empty()) {
+            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD_FILE",
+                            "account password file is empty");
+        }
+        return password;
+    }
+    if (options.account_password_stdin) {
+        const std::string password = read_password_line(in, kMaxMasterPasswordBytes);
+        if (password.empty()) {
+            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD",
+                            "account password must not be empty");
+        }
+        return password;
+    }
+    return read_password(in, out, "Account password: ", false, true);
+}
+
 int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
              std::ostream &err) {
     (void)err;

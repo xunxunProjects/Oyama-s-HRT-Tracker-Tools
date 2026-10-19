@@ -126,6 +126,13 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
                 parsed.options.vault_password_file = take_value();
             } else if (name == "--log-file") {
                 parsed.options.log_file = take_value();
+            } else if (name == "--user-id") {
+                parsed.options.user_id = take_value();
+            } else if (name == "--account-password-file") {
+                parsed.options.account_password_file = take_value();
+            } else if (name == "--account-password-stdin") {
+                boolean_flag();
+                parsed.options.account_password_stdin = true;
             } else {
                 if (!command_seen) {
                     usage_error("unknown option: " + name);
