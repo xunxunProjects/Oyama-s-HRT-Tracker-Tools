@@ -44,6 +44,7 @@ add_library(hrtcpp STATIC
     src/entropy.cpp
     src/file_io.cpp
     src/http.cpp
+    src/hrt_protocol.cpp
     src/local_commands.cpp
     src/log.cpp
     src/model.cpp
@@ -112,6 +113,10 @@ if(BUILD_TESTING)
     add_executable(http_test tests/http_test.cpp)
     target_link_libraries(http_test PRIVATE hrtcpp)
     add_test(NAME http COMMAND http_test)
+
+    add_executable(hrt_protocol_test tests/hrt_protocol_test.cpp)
+    target_link_libraries(hrt_protocol_test PRIVATE hrtcpp)
+    add_test(NAME hrt_protocol COMMAND hrt_protocol_test)
 
     add_executable(trust_test tests/trust_test.cpp)
     target_link_libraries(trust_test PRIVATE hrtcpp)

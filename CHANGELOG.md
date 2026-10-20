@@ -47,6 +47,9 @@
   request sends the unresolved target name to the proxy, proving target DNS
   stays at the proxy. Documented that `hrt://` requires a self-hosted raw
   TLS listener and is unavailable on edge/serverless platforms.
+- Added the `hrt/1` frame codec: a 4-byte big-endian length followed by one
+  JSON envelope, capped at 1 MiB, with strict length, JSON, and envelope
+  validation. This is the wire format used by the self-hosted raw transport.
 
 ## 0.1.0 — 2026-10-19 (pre-release)
 
