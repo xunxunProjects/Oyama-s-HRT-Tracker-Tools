@@ -250,6 +250,10 @@ This service is deliberately not part of `hrt-tool`'s default backup
 path. It serves the face-to-face network where members verify each other's
 fingerprints out of band.
 
+The server implementation contract (schema, seat rules, endpoints, and the
+current escrow/key-generation boundary) lives in the main repository at
+`docs/hrt-protocol/F2F_SERVICE.md`.
+
 ### 9.1 Trust model
 
 - Every user generates their **own** OpenPGP key pair on the client. The
