@@ -1,11 +1,31 @@
 #include "cli.h"
 
 #include "commands.h"
+#include "console.h"
 #include "error.h"
 #include "net_error.h"
 
 #include <nlohmann/json.hpp>
+#include <cstdio>
 #include <string>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace {
+
+bool stdin_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return ::isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+} // namespace
 
 namespace {
 
@@ -252,6 +272,9 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
             std::ostream &err) {
     ParsedArgs parsed;
     try {
+        if (argc == 1 && stdin_is_tty()) {
+            return run_console(GlobalOptions{}, in, out, err);
+        }
         parsed = parse_args(argc, argv);
         if (parsed.help || parsed.command.empty()) {
             print_help(out);

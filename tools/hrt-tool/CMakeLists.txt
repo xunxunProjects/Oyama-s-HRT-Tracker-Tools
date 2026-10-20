@@ -41,6 +41,7 @@ add_library(hrtcpp STATIC
     src/cli.cpp
     src/command_flags.cpp
     src/commands.cpp
+    src/console.cpp
     src/encrypted_file.cpp
     src/entropy.cpp
     src/exit_codes.cpp
@@ -128,6 +129,10 @@ if(BUILD_TESTING)
     add_executable(net_error_test tests/net_error_test.cpp)
     target_link_libraries(net_error_test PRIVATE hrtcpp)
     add_test(NAME net_error COMMAND net_error_test)
+
+    add_executable(console_test tests/console_test.cpp)
+    target_link_libraries(console_test PRIVATE hrtcpp)
+    add_test(NAME console COMMAND console_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

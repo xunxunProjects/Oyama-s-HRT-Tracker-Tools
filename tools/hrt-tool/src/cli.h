@@ -10,3 +10,5 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
 
 /* Parse argv without dispatching. Exposed for tests and the console. */
 ParsedArgs parse_cli_args(int argc, const char *const *argv);
+
+void print_help(std::ostream &out);

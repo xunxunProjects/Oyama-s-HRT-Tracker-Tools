@@ -2,6 +2,7 @@
 
 #include "api.h"
 #include "backup_envelope.h"
+#include "console.h"
 #include "encrypted_file.h"
 #include "link.h"
 #include "entropy.h"
@@ -1566,6 +1567,7 @@ const std::set<std::string> &known_commands() {
         "version", "init",    "login",    "logout",    "whoami", "look",
         "add",     "dose",    "lab",      "weight",    "export", "import",
         "snapshot", "config", "logs",     "add-link",  "commit-server", "link",
+        "console",
     };
     return kCommands;
 }
@@ -1679,6 +1681,9 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
 
     if (parsed.command == "version") {
         return command_version(parsed, out);
+    }
+    if (parsed.command == "console") {
+        return run_console(parsed.options, in, out, err);
     }
     if (parsed.command == "init") {
         return command_init(parsed, in, out, err);
