@@ -169,7 +169,7 @@ private:
             return;
         }
         if (options_.pinned_spki_sha256.empty()) {
-            throw ToolError(ExitCode::Usage, "HRT_TRUST",
+            throw ToolError(ExitCode::Trust, "HRT_TRUST",
                             "the raw server has no pinned public key; run "
                             "hrt-tool login");
         }

@@ -1,9 +1,11 @@
 #include "http.h"
 
 #include "error.h"
+#include "net_error.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>
 #include <cstring>
 #include <mutex>
@@ -693,15 +695,17 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     if (result != CURLE_OK) {
         if (result == CURLE_SSL_PINNEDPUBKEYNOTMATCH) {
             /* The handshake was refused before the request body was sent. */
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "server public-key pin did not match; refusing the "
                             "request");
         }
         if (write_context.too_large) {
-            throw ToolError(ExitCode::Network, "HTTP_TOO_LARGE",
-                            "server response is larger than 16 MiB");
+            throw NetworkFailure("HTTP_TOO_LARGE",
+                                 "server response is larger than 16 MiB",
+                                 FailureKind::ServerInitiated);
         }
-        throw ToolError(ExitCode::Network, "HTTP", curl_easy_strerror(result));
+        throw NetworkFailure("HTTP", curl_easy_strerror(result),
+                             classify_curl(static_cast<int>(result), errno));
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);

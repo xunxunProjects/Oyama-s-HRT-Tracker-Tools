@@ -21,6 +21,7 @@ struct GlobalOptions {
     bool yes = false;
     bool force = false;
     bool probe = false;
+    bool no_humor = false;
     long timeout_s = 30;
     bool trust_server = false;
     bool insecure_tls = false;

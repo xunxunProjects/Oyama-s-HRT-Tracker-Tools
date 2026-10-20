@@ -2,6 +2,7 @@
 
 #include "commands.h"
 #include "error.h"
+#include "net_error.h"
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -102,6 +103,9 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
             } else if (name == "--probe") {
                 boolean_flag();
                 parsed.options.probe = true;
+            } else if (name == "--no-humor") {
+                boolean_flag();
+                parsed.options.no_humor = true;
             } else if (name == "--trust-server") {
                 boolean_flag();
                 parsed.options.trust_server = true;
@@ -246,13 +250,25 @@ void print_help(std::ostream &out) {
 
 int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &out,
             std::ostream &err) {
+    ParsedArgs parsed;
     try {
-        const ParsedArgs parsed = parse_args(argc, argv);
+        parsed = parse_args(argc, argv);
         if (parsed.help || parsed.command.empty()) {
             print_help(out);
             return 0;
         }
         return dispatch(parsed, in, out, err);
+    } catch (const NetworkFailure &error) {
+        if (should_print_human_line(parsed.options.debug, parsed.options.trace,
+                                    parsed.options.no_humor, true)) {
+            const std::string human =
+                failure_human_line(Language::En, error.kind());
+            if (!human.empty()) {
+                err << human << "\n";
+            }
+        }
+        err << "hrt-tool: " << error.what() << " [" << error.code() << "]\n";
+        return static_cast<int>(error.exit_code());
     } catch (const ToolError &error) {
         err << "hrt-tool: " << error.what() << " [" << error.code() << "]\n";
         return static_cast<int>(error.exit_code());

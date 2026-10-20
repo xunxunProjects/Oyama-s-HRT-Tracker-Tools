@@ -11,6 +11,7 @@
 #include "local_commands.h"
 #include "log.h"
 #include "model.h"
+#include "net_error.h"
 #include "paths.h"
 #include "prompt.h"
 #include "session.h"
@@ -197,7 +198,7 @@ std::string authenticated_server(const ParsedArgs &parsed, const VaultData &data
         return saved;
     }
     if (!same_origin(parsed.options.server, saved)) {
-        throw ToolError(ExitCode::Usage, "SERVER_MISMATCH",
+        throw ToolError(ExitCode::Trust, "SERVER_MISMATCH",
                         "the saved session belongs to " + saved +
                             "; run hrt-tool login --server " +
                             parsed.options.server + " to switch");
@@ -227,7 +228,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
                                 "config set proxy " + suggested);
         }
         if (lower_ascii(parse_url(http.proxy).scheme) != "socks5h") {
-            throw ToolError(ExitCode::Usage, "PROXY_DNS",
+            throw ToolError(ExitCode::Trust, "PROXY_DNS",
                             std::string("hidden-service traffic must use a socks5h:// "
                                         "proxy. Run: hrt-tool config set proxy ") +
                                 suggested);
@@ -242,7 +243,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     probe.close();
     const std::string pin = certificate.spki_sha256;
     if (pin.empty()) {
-        throw ToolError(ExitCode::Network, "TRUST_NO_PIN",
+        throw ToolError(ExitCode::Trust, "TRUST_NO_PIN",
                         "could not compute the raw server public-key pin");
     }
 
@@ -261,7 +262,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
             << " changed. This can mean a machine-in-the-middle or a server key "
                "rotation.\n";
         if (!parsed.options.trust_server) {
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "refusing the changed key; re-trust explicitly with "
                             "--trust-server");
         }
@@ -300,7 +301,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         err.flush();
         std::string answer;
         if (!std::getline(in, answer)) {
-            throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+            throw ToolError(ExitCode::Trust, "TRUST_REFUSED",
                             "server was not trusted");
         }
         if (!answer.empty() && answer.back() == '\r') {
@@ -310,7 +311,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         persist = accepted;
     }
     if (!accepted) {
-        throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+        throw ToolError(ExitCode::Trust, "TRUST_REFUSED",
                         "server was not trusted");
     }
     if (persist) {
@@ -351,7 +352,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         }
         if (lower_ascii(parse_url(http.proxy).scheme) != "socks5h") {
             throw ToolError(
-                ExitCode::Usage, "PROXY_DNS",
+                ExitCode::Trust, "PROXY_DNS",
                 std::string("hidden-service traffic must use a socks5h:// proxy "
                             "so DNS is resolved by the ") +
                     network + " proxy. Run: " + set_proxy);
@@ -391,7 +392,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
 
     const bool tls = lower_ascii(parsed_url.scheme) == "https";
     if (tls && response.spki_sha256.empty()) {
-        throw ToolError(ExitCode::Network, "TRUST_NO_PIN",
+        throw ToolError(ExitCode::Trust, "TRUST_NO_PIN",
                         "could not compute the server public-key pin");
     }
     const std::string pin = tls ? response.spki_sha256 : "none";
@@ -419,7 +420,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
             << " changed. This can mean a machine-in-the-middle or a server key "
                "rotation.\n";
         if (!parsed.options.trust_server) {
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "refusing the changed key; re-trust explicitly with "
                             "--trust-server");
         }
@@ -468,7 +469,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         err.flush();
         std::string answer;
         if (!std::getline(in, answer)) {
-            throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+            throw ToolError(ExitCode::Trust, "TRUST_REFUSED",
                             "server was not trusted");
         }
         if (!answer.empty() && answer.back() == '\r') {
@@ -478,7 +479,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
         persist = accepted;
     }
     if (!accepted) {
-        throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+        throw ToolError(ExitCode::Trust, "TRUST_REFUSED",
                         "server was not trusted");
     }
 
@@ -879,7 +880,26 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
         make_api_client(server, http, unlocked.session().data.token);
-    std::optional<Snapshot> snapshot = client->latest_snapshot();
+    std::optional<Snapshot> snapshot;
+    for (int attempt = 0;; ++attempt) {
+        try {
+            snapshot = client->latest_snapshot();
+            break;
+        } catch (const NetworkFailure &failure) {
+            const bool debug = parsed.options.debug || parsed.options.trace;
+            if (!should_retry(failure.kind(), true, debug, attempt)) {
+                if (failure.kind() == FailureKind::TunnelInterrupted &&
+                    attempt >= 2) {
+                    throw NetworkFailure(failure.code(), failure.what(),
+                                         FailureKind::FinalFallback);
+                }
+                throw;
+            }
+            err << failure_human_line(Language::En, FailureKind::Timeout) << "\n";
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(attempt == 0 ? 500 : 1500));
+        }
+    }
     if (!snapshot.has_value()) {
         throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
                         "the account has no snapshot yet");

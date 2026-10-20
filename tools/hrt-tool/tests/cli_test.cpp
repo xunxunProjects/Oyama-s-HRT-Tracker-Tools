@@ -793,7 +793,7 @@ int main() {
                 {"whoami", "--insecure-tls", "--vault-password-stdin",
                  "--config-dir", temp.path().string()},
                 kPasswordLine);
-            CHECK_EQ(whoami.code, 4);
+            CHECK_EQ(whoami.code, static_cast<int>(ExitCode::Trust));
             CHECK(contains(whoami.err, "TRUST_CHANGED"));
             CHECK_EQ(server.authenticated_requests(), 0);
 
@@ -824,7 +824,7 @@ int main() {
                 {"login", "--server", server.url(), "--username", "Alice",
                  "--vault-password-stdin", "--config-dir", temp.path().string()},
                 std::string(kPasswordLine) + "no\n");
-            CHECK_EQ(refused.code, 4);
+            CHECK_EQ(refused.code, static_cast<int>(ExitCode::Trust));
             CHECK(contains(refused.err, "TRUST_REFUSED"));
         }
 

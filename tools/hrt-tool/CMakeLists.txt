@@ -55,6 +55,7 @@ add_library(hrtcpp STATIC
     src/local_commands.cpp
     src/log.cpp
     src/model.cpp
+    src/net_error.cpp
     src/paths.cpp
     src/pk.cpp
     src/prompt.cpp
@@ -123,6 +124,10 @@ if(BUILD_TESTING)
     add_executable(i18n_test tests/i18n_test.cpp)
     target_link_libraries(i18n_test PRIVATE hrtcpp)
     add_test(NAME i18n COMMAND i18n_test)
+
+    add_executable(net_error_test tests/net_error_test.cpp)
+    target_link_libraries(net_error_test PRIVATE hrtcpp)
+    add_test(NAME net_error COMMAND net_error_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
