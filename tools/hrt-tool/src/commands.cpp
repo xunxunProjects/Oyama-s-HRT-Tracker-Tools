@@ -1190,7 +1190,7 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
                                 "cannot stat " + out_path + ": " +
                                     exists_error.message());
             }
-            if (exists && !has_argument(parsed.command_args, "--force")) {
+            if (exists && !parsed.options.force) {
                 throw ToolError(
                     ExitCode::Usage, "SNAPSHOT_EXISTS",
                     "refusing to overwrite " + out_path +

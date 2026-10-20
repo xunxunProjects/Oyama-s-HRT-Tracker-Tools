@@ -19,6 +19,8 @@ struct GlobalOptions {
     bool json = false;
     bool no_color = false;
     bool yes = false;
+    bool force = false;
+    bool probe = false;
     long timeout_s = 30;
     bool trust_server = false;
     bool insecure_tls = false;

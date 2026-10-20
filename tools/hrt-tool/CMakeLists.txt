@@ -96,6 +96,10 @@ if(BUILD_TESTING)
     target_link_libraries(proxy_test PRIVATE hrtcpp)
     add_test(NAME proxy COMMAND proxy_test)
 
+    add_executable(parse_args_test tests/parse_args_test.cpp)
+    target_link_libraries(parse_args_test PRIVATE hrtcpp)
+    add_test(NAME parse_args COMMAND parse_args_test)
+
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)

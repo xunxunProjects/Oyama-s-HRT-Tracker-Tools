@@ -21,6 +21,13 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string token = argv[i];
 
+        /* f2f owns every token after the command: its flags overlap the
+           global names and have different semantics. */
+        if (command_seen && parsed.command == "f2f") {
+            parsed.command_args.push_back(token);
+            continue;
+        }
+
         if (token == "--") {
             for (++i; i < argc; ++i) {
                 if (!command_seen) {
@@ -89,6 +96,12 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
             } else if (name == "--yes") {
                 boolean_flag();
                 parsed.options.yes = true;
+            } else if (name == "--force") {
+                boolean_flag();
+                parsed.options.force = true;
+            } else if (name == "--probe") {
+                boolean_flag();
+                parsed.options.probe = true;
             } else if (name == "--trust-server") {
                 boolean_flag();
                 parsed.options.trust_server = true;
@@ -170,6 +183,10 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
     }
 
     return parsed;
+}
+
+ParsedArgs parse_cli_args(int argc, const char *const *argv) {
+    return parse_args(argc, argv);
 }
 
 void print_help(std::ostream &out) {
