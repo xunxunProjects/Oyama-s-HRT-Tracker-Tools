@@ -318,8 +318,6 @@ code or its hash.
 
 ## 13. Open questions
 
-- Where the self-hosted server and web bundle live (main repo vs a new
-  component) and how they share the account database.
 - Whether pairing should also be offered on the Cloudflare-hosted site over
   HTTPS in a later phase.
 - Exact retention for device entries and trusted IPs (90 days is a
@@ -327,3 +325,56 @@ code or its hash.
 - Whether the HTTPS fallback should require device proof-of-possession now
   or later.
 - Local GeoIP database and licensing for self-hosted country display.
+
+## 14. Selected raw-server architecture
+
+The operator selected a standalone raw protocol server rather than an
+application-layer envelope over HTTPS. The selected shape is a **TLS/mTLS
+protocol adapter** in front of the existing self-hosted web application:
+
+- **One account system.** The web application remains the source of truth
+  for accounts, pairing requests, device registrations, holds, and trusted
+  IPs. The raw server does not create a second account database and does
+  not reimplement password auth. This keeps the original web auth code
+  untouched and avoids a second security boundary to audit.
+- **Raw server responsibilities.** A standalone Node.js/TypeScript process
+  owns the TLS 1.3 listener, the server certificate and device CA, mTLS
+  verification, the framed protocol, connection limits, and the loopback
+  call to the web app. It stores no account data.
+- **Wire protocol.** ALPN `hrt/1`; TLS 1.3 with a pinned server key; client
+  certificates required after pairing. Frames are a 4-byte big-endian
+  length followed by a JSON object with a request id, an operation
+  (`pair.start`, `pair.poll`, `request`, `ping`), and a bounded body. `request`
+  is allowlisted to `/api/tool/v1/*` and a small header set; the raw server
+  is not a general forward proxy. Frames are capped (1 MiB) with per-
+  connection timeouts and request-id idempotency.
+- **Pairing path.** `pair.start` and `pair.poll` are the only operations
+  allowed without a client certificate. The raw server forwards them to
+  the web app's internal `/api/tool/v1/hrt/*` endpoints over loopback,
+  authenticated by a service token in a 0600 file. The web app records the
+  observed IP/country and returns the approval state. After approval, the
+  raw server signs a device certificate for the approved public key and
+  returns the token; subsequent frames require mTLS.
+- **Web approval.** The existing web session calls additive
+  Account → Security endpoints in the web app; the web app owns the data.
+  The raw server never serves the browser session.
+- **Data path.** The raw server translates allowlisted frames to HTTP
+  requests to the web app at loopback, forwarding `Authorization`,
+  `If-Match`, and the verified device key. The web app validates the token
+  and device binding; the raw server does not interpret health data.
+- **Deployment.** The self-hosted Docker image runs the web app and the raw
+  server as separate processes on the same volume. The raw server listens
+  on a distinct port (for example 9443); `HRT_RAW_ENABLED=0` is the default,
+  and the web capability advertises `hrt` only when the operator enables
+  it. Cloudflare deployments cannot run the raw server and advertise it as
+  unsupported.
+- **Client.** `hrt-tool` uses an OpenSSL-based raw client (TLS 1.3, SPKI
+  pin, optional client certificate) with a SOCKS5h connector for Tor/I2P.
+  It falls back to HTTPS with the warning in §8.2 when the raw transport is
+  unavailable or the operator requires it.
+
+This shape gives the operator a raw, self-controlled encrypted channel
+without duplicating the account/auth stack. The open question is whether
+the operator wants the raw server to remain an adapter (recommended) or to
+become a fully independent account system; the latter would duplicate
+password/auth logic and is not part of this design.
