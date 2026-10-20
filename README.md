@@ -33,11 +33,35 @@ logs, URL/trust policy, the C PK engine validated against the website, cloud
 snapshot decryption, and local `look`/`add`/`dose`/`lab`/`weight`/`export`/
 `import` commands. The live server client is M3/M4.
 
-The third tool, [`hrt-f2f`](tools/hrt-f2f/README.md), is the dedicated
-face-to-face keyring CLI. It generates member-owned OpenPGP keys, uploads only
-public keys, downloads the cohort keyring, and encrypts/decrypts locally.
-Private keys are never sent to the server. It is separate from both the
-cold-backup container and the account transport.
+The F2F keyring commands are part of [`hrt-tool`](tools/hrt-tool/README.md)
+as `hrt-tool f2f ...` (the Go/OpenPGP implementation is linked into the C++
+binary as a local library). It generates member-owned OpenPGP keys, uploads
+only public keys, downloads the cohort keyring, and encrypts/decrypts locally.
+Private keys are never sent to the server. The same binary now provides the
+interactive `hrt>` console, named links, `status`, interactive `add dose`,
+proxy shortcuts, and `make install`/`make update`. The standalone
+[`hrt-f2f`](tools/hrt-f2f/README.md) source remains for development.
+
+## Quick start (merged CLI)
+
+```sh
+make -C tools/hrt-tool install          # PREFIX=/usr/local by default
+hrt-tool console                        # or just hrt-tool on a TTY
+```
+
+Inside the console:
+
+```text
+hrt> add-link hrt://hrt.example.org:9443 mtf
+hrt> commit-server mtf
+hrt$mtf> status all
+hrt$mtf> add dose
+hrt$mtf> exit
+```
+
+`hrt-tool f2f ...` exposes the F2F keyring commands. `hrt-tool help
+exit-codes` prints the stable exit-code table. `make update` rebuilds and
+reinstalls the current tree without touching the vault.
 
 ## Download
 

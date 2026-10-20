@@ -1,89 +1,88 @@
 #!/usr/bin/env bash
-# Build the four released hrt-f2f binaries, test the module, and package the
-# tar.xz with SHA-512 and MD5 hashes.
+# Build the merged hrt-tool release for the host Linux target and package it
+# with SHA-512 and MD5 hashes.
 #
 #   tools/hrt-f2f/scripts/build-release.sh [VERSION] [OUTPUT_DIR]
 #
-# Defaults: VERSION=0.1.0, OUTPUT_DIR=<repo>/dist
-#
-# The Go CLI is pure Go, so cross-compilation uses GOOS/GOARCH with
-# CGO_ENABLED=0.
+# The F2F implementation is linked as a Go c-archive, so this script builds a
+# native host binary rather than cross-compiling the old CGO_ENABLED=0
+# hrt-f2f CLI. Windows and 32-bit targets need a separate toolchain and are
+# not produced here.
 set -euo pipefail
 
 VERSION="${1:-0.1.0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-TOOL_DIR="$ROOT/tools/hrt-f2f"
 OUT_ROOT="${2:-$ROOT/dist}"
-PKG_NAME="hrt-f2f-$VERSION"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+MACHINE="$(uname -m)"
+case "$MACHINE" in
+    x86_64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    i386|i686) ARCH="386" ;;
+    *) ARCH="$MACHINE" ;;
+esac
+PKG_NAME="hrt-tool-$VERSION-$OS-$ARCH"
 PKG_DIR="$OUT_ROOT/$PKG_NAME"
-ARCHIVE="$OUT_ROOT/$PKG_NAME-multiarch.tar.xz"
+ARCHIVE="$OUT_ROOT/$PKG_NAME.tar.xz"
+BUILD_DIR="$OUT_ROOT/.hrt-tool-build-$VERSION"
 
-for tool in go tar xz sha512sum md5sum; do
+for tool in cmake go cargo ctest tar xz sha512sum md5sum; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "build-release: missing required tool: $tool" >&2
         exit 1
     }
 done
 
+if [ "$OS" != "linux" ]; then
+    echo "build-release: the merged hrt-tool release is built for Linux only" >&2
+    exit 1
+fi
+
 echo "build-release: version $VERSION"
-echo "build-release: tool dir $TOOL_DIR"
-echo "build-release: output   $OUT_ROOT"
+echo "build-release: target  $OS/$ARCH"
+echo "build-release: output  $OUT_ROOT"
 
-rm -rf "$PKG_DIR"
-mkdir -p "$PKG_DIR/bin" "$OUT_ROOT"
+rm -rf "$PKG_DIR" "$BUILD_DIR"
+mkdir -p "$OUT_ROOT"
 
-echo "build-release: running Go tests"
+echo "build-release: running Go F2F tests"
 (
-    cd "$TOOL_DIR"
+    cd "$ROOT/tools/hrt-f2f"
     go test -count=1 ./...
 )
 
-# Linux first, then Windows; 64-bit before 32-bit.
-TARGETS=(
-    "linux amd64"
-    "windows amd64"
-    "linux 386"
-    "windows 386"
-)
+echo "build-release: configuring and building hrt-tool"
+cmake -S "$ROOT/tools/hrt-tool" -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$PKG_DIR" >/dev/null
+cmake --build "$BUILD_DIR" --parallel
 
-for spec in "${TARGETS[@]}"; do
-    os="${spec% *}"
-    arch="${spec#* }"
-    name="hrt-f2f-$os-$arch"
-    if [ "$os" = "windows" ]; then
-        name="$name.exe"
-    fi
-    echo "build-release: building $os/$arch -> bin/$name"
-    (
-        cd "$TOOL_DIR"
-        CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-            go build -trimpath -buildvcs=false \
-            -ldflags "-s -w -X main.buildVersion=$VERSION" \
-            -o "$PKG_DIR/bin/$name" .
-    )
-done
+echo "build-release: running C/F2F tests"
+ctest --test-dir "$BUILD_DIR" --output-on-failure
 
-cp "$TOOL_DIR/README.md" "$PKG_DIR/README.md"
-cp "$TOOL_DIR/THIRD_PARTY_NOTICES.md" "$PKG_DIR/THIRD_PARTY_NOTICES.md"
+echo "build-release: installing package"
+cmake --install "$BUILD_DIR" >/dev/null
 cp "$ROOT/LICENSE" "$PKG_DIR/LICENSE"
+cp "$ROOT/tools/hrt-f2f/THIRD_PARTY_NOTICES.md" \
+    "$PKG_DIR/THIRD_PARTY_NOTICES.md"
 
 {
-    echo "name: hrt-f2f"
+    echo "name: hrt-tool"
     echo "version: $VERSION"
     echo "commit: $(git -C "$ROOT" rev-parse HEAD)"
     echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "go: $(go version)"
-    echo "targets:"
-    printf '  %s\n' "${TARGETS[@]}"
-    echo "note: binaries are built with CGO_ENABLED=0 and need no runtime toolchain"
+    echo "target: $OS/$ARCH"
+    echo "note: F2F is linked as a Go c-archive; the host needs no Go toolchain"
 } >"$PKG_DIR/BUILD_INFO.txt"
 
 (
     cd "$PKG_DIR"
-    sha512sum bin/* >SHA512SUMS
-    md5sum bin/* >MD5SUMS
+    sha512sum bin/hrt-tool >SHA512SUMS
+    md5sum bin/hrt-tool >MD5SUMS
 )
 
+rm -rf "$BUILD_DIR"
 echo "build-release: creating $ARCHIVE"
 tar -C "$OUT_ROOT" -cJf "$ARCHIVE" "$PKG_NAME"
 
@@ -95,9 +94,7 @@ tar -C "$OUT_ROOT" -cJf "$ARCHIVE" "$PKG_NAME"
 
 echo
 echo "build-release: done"
+echo "  package: $PKG_DIR"
 echo "  archive: $ARCHIVE"
 echo "  sha512:  $ARCHIVE.sha512"
 echo "  md5:     $ARCHIVE.md5"
-echo
-cat "$ARCHIVE.sha512"
-cat "$ARCHIVE.md5"

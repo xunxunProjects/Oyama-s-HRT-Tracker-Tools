@@ -1,6 +1,38 @@
 # Changelog
 
-## Unreleased — `hrt-tool`
+## Unreleased — merged `hrt-tool` console
+
+- `hrt-f2f` is merged into `hrt-tool`: the Go/OpenPGP implementation is
+  built as a `c-archive` and called by C++; the installed binary is still
+  `hrt-tool`, and F2F is namespaced `hrt-tool f2f ...` with raw flag
+  pass-through and no link/vault inheritance.
+- Interactive console: `hrt-tool console` (or bare `hrt-tool` on a TTY),
+  `hrt>` base prompt, named links via `add-link`/`commit-server`, and the
+  `hrt$link>` prompt with `exit` returning to base. Vault v2 stores each
+  link's own encrypted session, language, welcome text, and humour setting.
+- `status [all]` prints the current concentration, expected 1m–2d values,
+  and recent labs with both unit pairs and the assay; `--json`, `--watch`,
+  and `--at` are supported.
+- Interactive `add dose` with a `[Yes/No]` summary and real save phases;
+  `add dose --debug` shows raw transport diagnostics. Failed mutations
+  never print `100% done` and are never retried automatically.
+- Proxy: `socks5://` is accepted and rewritten to `socks5h://` (DNS at the
+  proxy); `proxy tor|i2p|off|status|test` shortcuts; HTTP(S)/SOCKS4 still
+  refused.
+- Humorous but diagnostic tunnel/server/timeout messages, a final
+  `Oh no...` fallback, `--no-humor`, and `--debug`/`--trace` pure
+  diagnostics with no retries.
+- Stable exit codes `0`–`14`, `help exit-codes`, and reclassified
+  auth/trust/conflict/cancelled/config errors.
+- New commands: `console`, `add-link`, `commit-server`, `link`, `status`,
+  `proxy`, `doctor`, `completion`, `help`, `f2f`, and `version --json`.
+- CMake install rules and a source-tree `Makefile`: `make install` and
+  `make update` (cached prefix, no source fetch, no reconfigure), plus
+  options for F2F, warnings-as-errors, and ASan/UBSan.
+- CI: Go setup, install smoke test, a warnings-as-errors build, and an
+  ASan/UBSan job with F2F disabled.
+
+## Unreleased — `hrt-tool` (original M1–M4 work)
 
 - New `hrt-tool` terminal client, a separate codebase from `hrt-cold`:
   C11 crypto core, C++17 CLI, and Rust printer.

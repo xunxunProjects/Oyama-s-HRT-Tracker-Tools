@@ -253,6 +253,10 @@ if(BUILD_TESTING)
     target_link_libraries(f2f_bridge_test PRIVATE hrtcpp)
     add_test(NAME f2f_bridge COMMAND f2f_bridge_test)
 
+    add_executable(console_integration_test tests/console_integration_test.cpp)
+    target_link_libraries(console_integration_test PRIVATE hrtcpp)
+    add_test(NAME console_integration COMMAND console_integration_test)
+
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)

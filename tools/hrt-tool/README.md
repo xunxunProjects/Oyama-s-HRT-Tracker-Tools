@@ -16,11 +16,66 @@ the local and live `look`/`add`/`dose`/`lab`/`weight` commands, local
 `config get|set|unset`, including the website's age clearance adjustment.
 Still to come: the optional transport envelope and calibration.
 
+## Merged tool, console, and links
+
+`hrt-tool` is now the single installed client. The former `hrt-f2f`
+commands live under `hrt-tool f2f ...` and are linked as a Go
+`c-archive`; no separate `hrt-f2f` binary is installed. The F2F surface is
+a raw pass-through: every token after `f2f` goes to the Go flag parser, so
+`hrt-tool f2f login --server ... --token-file ...` keeps its own
+semantics. F2F never reads or inherits the account vault's link, token,
+proxy, or mode.
+
+Start the interactive console with `hrt-tool console`, or run `hrt-tool`
+with no arguments on a terminal. The prompt is `hrt>`. A named link is an
+account context with its own encrypted session:
+
+```text
+hrt> add-link hrt://hrt.example.org:9443 mtf
+hrt> commit-server mtf
+hrt$mtf> status all
+hrt$mtf> add dose
+hrt$mtf> exit
+hrt>
+```
+
+`exit` in `hrt$name>` returns to the base link and persists it; `Ctrl-D`
+keeps the current link. `commit-server -` returns to the base link. The
+active link also applies to one-shot commands. `link list|show|rename|remove`
+manages links; `link show` prints only redacted session state.
+
+`status [all]` prints the current concentration, the expected values at
+1m/5m/10m/30m/1h/2h/4h/8h/12h/24h/2d, and the three most recent blood
+tests (E2 in pmol/L and pg/mL, T in ng/dL and nmol/L, plus the assay).
+`status all` shows every stored lab; `--at` overrides the offsets;
+`--watch SECONDS` re-renders until interrupted; `--json` is stable.
+
+`add dose` with no dose flags starts the interactive interview (drug,
+dose, time, route, summary `[Yes/No]`) and prints the record id,
+`hrt:YES`, the timestamp/user block, and a real phase progress line.
+`--debug` switches to raw transport diagnostics. A failed save never
+prints `100% done` and is never retried automatically.
+
+`proxy socks5://HOST:PORT` is accepted and rewritten to `socks5h://`
+(DNS at the proxy); HTTP(S)/SOCKS4 proxies are refused. `proxy tor`,
+`proxy i2p`, `proxy off`, `proxy status`, and `proxy test` are shortcuts.
+
+Network failures get a short human line plus the technical cause and
+error code. `--debug`/`--trace` suppress the human line and all retries;
+`--no-humor` only suppresses the human line. Mutations never auto-retry.
+Reads retry a tunnel interruption twice.
+
+Exit codes: `0` OK, `1` INTERNAL, `2` USAGE, `3` VAULT, `4` NETWORK,
+`5` DATA, `6` NOT_IMPLEMENTED, `7` AUTH, `8` TRUST, `9` PERMISSION,
+`10` CONFLICT, `11` CANCELLED, `12` CONFIG, `13` F2F, `14` PLATFORM.
+`hrt-tool help exit-codes` prints the table.
+
 ## Build
 
 Dependencies: C11, C++17, CMake >= 3.16, OpenSSL >= 3.0, libcurl,
-nlohmann/json, and a Rust toolchain (stable). OpenSSL 3 is required for
-`EVP_MAC`, `OSSL_PARAM`, and the HKDF controls.
+nlohmann/json, a Rust toolchain (stable), and Go 1.23+ for the F2F
+c-archive. OpenSSL 3 is required for `EVP_MAC`, `OSSL_PARAM`, and the
+HKDF controls.
 
 Debian/Ubuntu:
 
@@ -37,7 +92,29 @@ ctest --test-dir tools/hrt-tool/build --output-on-failure
 ```
 
 The Rust printer is built by CMake with `cargo build --release --offline`. The
-crate has no dependencies, so the offline build is reproducible.
+crate has no dependencies, so the offline build is reproducible. The Go F2F
+library is built as a `c-archive` with the same CMake build; pass
+`-DHRT_TOOL_ENABLE_F2F=OFF` for a build without Go (the `f2f` commands then
+return `PLATFORM`/`F2F_DISABLED`).
+
+### Install and update
+
+```sh
+# CMake directly
+sudo cmake --install tools/hrt-tool/build
+
+# Or the source-tree wrapper (PREFIX defaults to /usr/local)
+sudo make -C tools/hrt-tool install
+sudo make -C tools/hrt-tool update
+```
+
+`make install` configures, builds, and installs `hrt-tool` plus its docs.
+`make update` rebuilds and reinstalls using the prefix already cached in
+`build/CMakeCache.txt`; it does not fetch source, reconfigure, or touch the
+vault. To change the prefix, run `make install PREFIX=/new/prefix` once.
+
+CMake options: `HRT_TOOL_ENABLE_F2F` (ON), `HRT_TOOL_ENABLE_WARNINGS` (ON),
+`HRT_TOOL_ENABLE_WERROR` (OFF), `HRT_TOOL_ENABLE_SANITIZERS` (OFF).
 
 ## First run
 
@@ -72,6 +149,16 @@ command-line arguments are never used for secrets.
 | `login`, `logout`, `whoami` | Implemented over HTTPS and `hrt://`. `hrt://` uses web-approval pairing and a per-install device certificate; both transports pin the server key on first contact. |
 | `snapshot pull`, `snapshot push`, `snapshot list` | Implemented; pull writes an encrypted local snapshot, push merges and retries on `409`. |
 | `logs <other>` | Stub; exit `6`. |
+| `console` | Interactive `hrt>` / `hrt$link>` console. |
+| `add-link URL NAME` | Save a named account context (`hrt://`, `https://`, or policy-limited `http://`). |
+| `commit-server NAME` | Select a saved link for this and later commands. |
+| `link list\|show\|rename\|remove` | Manage links; `show` redacts secrets. |
+| `status [all]` | Current/expected concentrations and recent labs. |
+| `proxy tor\|i2p\|off\|status\|test` | Manage or test the SOCKS proxy. |
+| `doctor` | Check vault, proxy, server policy, trust pins, versions. |
+| `completion bash\|zsh\|fish` | Print a static completion script. |
+| `help [exit-codes]` | Command help or the exit-code table. |
+| `f2f ...` | F2F keygen/login/register/status/keyring/encrypt/decrypt. |
 
 ### Local snapshot workflow (M2)
 
@@ -292,8 +379,8 @@ Global flags (accepted before or after the command):
 
 ```text
 --server URL  --proxy URL  --config-dir DIR  --token-file FILE
---debug  --trace  --json  --no-color  --yes  --timeout SECONDS
---trust-server  --insecure-tls  --transport auto|tls|openssl-v1
+--debug  --trace  --json  --no-color  --yes  --force  --probe  --no-humor
+--timeout SECONDS  --trust-server  --insecure-tls  --transport auto|tls|openssl-v1
 --no-cache-cloud-key  --compute local|server
 --vault-password-file FILE  --vault-password-stdin  --log-file FILE
 --snapshot FILE  --mode transfem|transmasc  --utc
