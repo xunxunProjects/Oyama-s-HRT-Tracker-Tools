@@ -46,15 +46,20 @@ hrt-f2f keygen \
 ```
 
 Upload `alice-public.asc` and its fingerprint in **Account → F2F keyring** on
-the web app, or from the CLI with a web session token:
+the web app, or from the CLI. To use the CLI, generate a one-time login code in
+the same web section:
 
 ```sh
-# The token is the web session JWT. Treat it like a password and keep it 0600.
-printf '%s\n' "$SESSION_TOKEN" > f2f.token
-chmod 600 f2f.token
+# The code expires after 10 minutes and works once. The resulting token is
+# limited to F2F endpoints and can be revoked from the Sessions page.
+hrt-f2f login --server https://hrt.example.com \
+  --code <one-time-code> --token-out f2f.token
 hrt-f2f register --server https://hrt.example.com --token-file f2f.token \
   --public-key alice-public.asc
 ```
+
+The code is a credential until it is used: pass it with `--code-file` instead
+of `--code` if shell history is a concern.
 
 Download the cohort keyring, import it into your own tools, and encrypt:
 
@@ -92,6 +97,7 @@ hrt-f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
 | Command | Purpose |
 | --- | --- |
 | `keygen` | Generate a passphrase-locked OpenPGP key pair. |
+| `login` | Exchange a one-time web code for an F2F-scoped token. |
 | `register` | Upload a public key and fingerprint to the F2F API. |
 | `status` | Show the cohort, seat, active key, and escrow fingerprint. |
 | `keyring list` | List fingerprints and user IDs in a local keyring. |
@@ -126,9 +132,9 @@ this CLI, and the CLI reads keys and messages produced by GnuPG.
   server. Members exchange ciphertext through the channel they choose.
 - Escrow keys are provisioned by the server operator. This tool only uses the
   escrow public key; it cannot recover an escrowed message.
-- The web session token is a credential. A future enrollment flow may replace
-  the manual token file; until then, do not put the token in shell history or
-  command-line arguments.
+- The CLI token is a credential. It is scoped to F2F endpoints, expires after
+  seven days, and can be revoked from the web Sessions page. Keep it mode 0600
+  and out of shell history; use `--code-file` for the one-time code too.
 - The passphrase check is a length check, not an entropy estimator. Use a
   long, unique passphrase or a password manager.
 - The `.asc` files contain public keys unless they are named `private`; never
@@ -142,5 +148,5 @@ GOPROXY=off go test -count=1 ./...
 
 The suite covers key generation, locking, multi-recipient encryption, signing,
 tamper rejection, keyring splitting/deduplication, file permissions, the HTTP
-client, and GnuPG interoperability. GnuPG tests are skipped when `gpg` is not
+client, one-time code login, and GnuPG interoperability. GnuPG tests are skipped when `gpg` is not
 installed.

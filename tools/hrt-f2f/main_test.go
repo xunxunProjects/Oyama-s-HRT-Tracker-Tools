@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTestFile(t *testing.T, path string, data []byte, mode os.FileMode) {
@@ -94,6 +95,91 @@ func TestCLIKeygenEncryptDecrypt(t *testing.T) {
 	listCode, listOut, listErr := runCLI(t, "keyring", "list", publicFile)
 	if listCode != 0 || !strings.Contains(listOut, "Alice") {
 		t.Fatalf("keyring list: %d %q %q", listCode, listOut, listErr)
+	}
+}
+
+func TestCLILoginExchangesCodeForToken(t *testing.T) {
+	dir := t.TempDir()
+	tokenOut := filepath.Join(dir, "token")
+	codeFile := filepath.Join(dir, "code")
+	code := strings.Repeat("a1", 16)
+	expires := time.Now().Add(time.Hour).Unix()
+	writeTestFile(t, codeFile, []byte(code+"\n"), 0o600)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/f2f/cli/token" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["code"] != code {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":"INVALID_CODE","message":"no"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": testToken, "expires_at": expires})
+	}))
+	defer server.Close()
+
+	exit, stdout, stderr := runCLI(t, "login",
+		"--server", server.URL,
+		"--code-file", codeFile,
+		"--token-out", tokenOut,
+	)
+	if exit != 0 {
+		t.Fatalf("login failed: %s", stderr)
+	}
+	data, err := os.ReadFile(tokenOut)
+	if err != nil || string(data) != testToken+"\n" {
+		t.Fatalf("token file = %q, err = %v", data, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(tokenOut)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("token mode: %v", err)
+		}
+	}
+	if !strings.Contains(stdout, "expires") {
+		t.Fatalf("login output: %s", stdout)
+	}
+	if exit, _, stderr := runCLI(t, "login",
+		"--server", server.URL,
+		"--code", code,
+		"--token-out", tokenOut,
+	); exit == 0 {
+		t.Fatalf("login overwrote an existing token file: %s", stderr)
+	}
+}
+
+func TestCLILoginRejectsInvalidCode(t *testing.T) {
+	exit, _, stderr := runCLI(t, "login",
+		"--server", "https://example.invalid",
+		"--code", "not-a-code",
+		"--token-out", filepath.Join(t.TempDir(), "token"),
+	)
+	if exit == 0 || !strings.Contains(stderr, "invalid registration code") {
+		t.Fatalf("invalid code was accepted: exit=%d stderr=%q", exit, stderr)
+	}
+}
+
+func TestCLILoginRejectsInvalidServerToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token": "short", "expires_at": time.Now().Add(time.Hour).Unix(),
+		})
+	}))
+	defer server.Close()
+	tokenOut := filepath.Join(t.TempDir(), "token")
+	exit, _, stderr := runCLI(t, "login",
+		"--server", server.URL,
+		"--code", strings.Repeat("b2", 16),
+		"--token-out", tokenOut,
+	)
+	if exit == 0 || !strings.Contains(stderr, "invalid token") {
+		t.Fatalf("short token was accepted: exit=%d stderr=%q", exit, stderr)
+	}
+	if _, err := os.Stat(tokenOut); !os.IsNotExist(err) {
+		t.Fatalf("invalid token was written (err=%v)", err)
 	}
 }
 

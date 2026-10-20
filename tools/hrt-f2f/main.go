@@ -17,6 +17,7 @@ const (
 	maxPrivateKeyBytes = 128 << 10
 	maxPlaintextBytes  = 64 << 20
 	maxCiphertextBytes = 96 << 20
+	maxCodeBytes       = 1024
 )
 
 var buildVersion = "0.1.0"
@@ -44,6 +45,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "keygen":
 		err = cmdKeygen(args[1:], stdout, stderr)
+	case "login":
+		err = cmdLogin(args[1:], stdout, stderr)
 	case "register":
 		err = cmdRegister(args[1:], stdout, stderr)
 	case "status":
@@ -77,6 +80,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage:
   hrt-f2f keygen   --name NAME --email EMAIL --passphrase-file FILE
                    --private-out FILE --public-out FILE [--force]
+  hrt-f2f login    --server URL (--code CODE | --code-file FILE)
+                   --token-out FILE [--proxy SOCKS5H_URL] [--force]
   hrt-f2f register --server URL --token-file FILE --public-key FILE
                    [--fingerprint FPR] [--proxy SOCKS5H_URL] [--json]
   hrt-f2f status   --server URL --token-file FILE [--proxy SOCKS5H_URL] [--json]
@@ -162,6 +167,50 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "fingerprint: %s\n", key.Fingerprint)
 	fmt.Fprintf(stdout, "private key: %s (mode 0600)\n", *privateOut)
 	fmt.Fprintf(stdout, "public key: %s\n", *publicOut)
+	return nil
+}
+
+func cmdLogin(args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("login", stderr)
+	server := fs.String("server", "", "F2F server URL")
+	code := fs.String("code", "", "one-time registration code")
+	codeFile := fs.String("code-file", "", "file containing the registration code (0600)")
+	tokenOut := fs.String("token-out", "", "CLI token output")
+	proxyURL := fs.String("proxy", "", "socks5h:// proxy")
+	timeout := fs.Int("timeout", 30, "request timeout in seconds")
+	force := fs.Bool("force", false, "replace an existing token file")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *tokenOut == "" {
+		return errors.New("--token-out is required")
+	}
+	if (*code == "") == (*codeFile == "") {
+		return errors.New("use exactly one of --code and --code-file")
+	}
+	value := *code
+	if *codeFile != "" {
+		if err := privateFileMode(*codeFile); err != nil {
+			return err
+		}
+		data, err := readLimited(*codeFile, maxCodeBytes)
+		if err != nil {
+			return err
+		}
+		value = strings.TrimSpace(string(data))
+		if strings.ContainsAny(value, "\r\n") {
+			return errors.New("code file contains more than one line")
+		}
+	}
+	result, err := exchangeCliCode(*server, value, *proxyURL, time.Duration(*timeout)*time.Second)
+	if err != nil {
+		return err
+	}
+	if err := writeOutput(*tokenOut, []byte(result.Token+"\n"), *force); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "token written to %s (expires %s)\n",
+		*tokenOut, time.Unix(result.ExpiresAt, 0).UTC().Format(time.RFC3339))
 	return nil
 }
 

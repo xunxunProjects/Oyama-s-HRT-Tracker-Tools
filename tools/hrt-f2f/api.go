@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -71,24 +72,14 @@ type registerResult struct {
 	Idempotent  bool   `json:"idempotent"`
 }
 
-type apiClient struct {
-	base  string
-	token string
-	http  *http.Client
+type loginResult struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
-func newAPIClient(server, token, proxyURL string, timeout time.Duration) (*apiClient, error) {
-	parsed, err := validateServer(server)
-	if err != nil {
-		return nil, err
-	}
-	if len(token) < 16 || len(token) > maxTokenBytes || strings.ContainsAny(token, "\r\n") {
-		return nil, errors.New("invalid token")
-	}
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+var cliCodePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
+func newHTTPTransport(proxyURL string, timeout time.Duration) (*http.Transport, error) {
 	transport := &http.Transport{
 		Proxy:                 nil, /* environment proxies and no_proxy are never used */
 		TLSHandshakeTimeout:   timeout,
@@ -110,6 +101,31 @@ func newAPIClient(server, token, proxyURL string, timeout time.Duration) (*apiCl
 				return dialer.Dial(network, address)
 			}
 		}
+	}
+	return transport, nil
+}
+
+type apiClient struct {
+	base  string
+	token string
+	http  *http.Client
+}
+
+func newAPIClient(server, token, proxyURL string, timeout time.Duration) (*apiClient, error) {
+	parsed, err := validateServer(server)
+	if err != nil {
+		return nil, err
+	}
+	if len(token) < 16 || len(token) > maxTokenBytes || strings.ContainsAny(token, "\r\n") {
+		return nil, errors.New("invalid token")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	transport, err := newHTTPTransport(proxyURL, timeout)
+	if err != nil {
+		return nil, err
 	}
 
 	return &apiClient{
@@ -192,6 +208,76 @@ func (c *apiClient) Register(publicKey, fingerprint string) (*registerResult, er
 	var result registerResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("invalid register response: %w", err)
+	}
+	return &result, nil
+}
+
+func exchangeCliCode(server, code, proxyURL string, timeout time.Duration) (*loginResult, error) {
+	parsed, err := validateServer(server)
+	if err != nil {
+		return nil, err
+	}
+	code = strings.ToLower(strings.TrimSpace(code))
+	if !cliCodePattern.MatchString(code) {
+		return nil, errors.New("invalid registration code")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	transport, err := newHTTPTransport(proxyURL, timeout)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]string{"code": code})
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequest(
+		http.MethodPost,
+		strings.TrimRight(parsed.String(), "/")+"/api/f2f/cli/token",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxStatusResponse+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxStatusResponse {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxStatusResponse)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		apiErr := &apiError{Status: response.StatusCode, Message: response.Status}
+		var parsedErr apiError
+		if json.Unmarshal(data, &parsedErr) == nil {
+			if parsedErr.Code != "" {
+				apiErr.Code = parsedErr.Code
+			}
+			if parsedErr.Message != "" {
+				apiErr.Message = parsedErr.Message
+			}
+		}
+		return nil, apiErr
+	}
+	var result loginResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("invalid login response: %w", err)
+	}
+	if len(result.Token) < 32 || len(result.Token) > maxTokenBytes || strings.ContainsAny(result.Token, "\r\n") {
+		return nil, errors.New("server returned an invalid token")
+	}
+	if result.ExpiresAt <= 0 {
+		return nil, errors.New("server returned an invalid expiry")
 	}
 	return &result, nil
 }
