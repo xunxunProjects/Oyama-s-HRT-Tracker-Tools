@@ -1,7 +1,9 @@
 #include "cli.h"
 #include "test_framework.h"
+#include "vault.h"
 
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -90,6 +92,12 @@ std::string read_text(const std::filesystem::path &path) {
 }
 
 const char *kPasswordLine = "correct horse battery staple\n";
+
+int64_t test_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
 
 #ifndef _WIN32
 struct TestCertificate {
@@ -243,6 +251,9 @@ public:
         rotate_certificate_ = certificate;
     }
 
+    void fail_login(bool fail) { fail_login_ = fail; }
+    void drop_login(bool drop) { drop_login_ = drop; }
+
     int authenticated_requests() const { return authenticated_requests_; }
 
 private:
@@ -358,15 +369,24 @@ private:
                 ? std::string{}
                 : request.substr(first_space + 1, second_space - first_space - 1);
 
+        if (path == "/api/tool/v1/login" && drop_login_) {
+            return;
+        }
+
         std::string status = "200 OK";
         std::string body;
         if (path == "/api/tool/v1/version") {
             body = R"({"apiVersion":1,"minToolVersion":"0.1.0","transport":["tls"],)"
                    R"("serverTime":"2026-10-20T02:00:00.000Z"})";
         } else if (path == "/api/tool/v1/login") {
-            body = R"({"token":"tok-test-1","user":{"id":"user-1",)"
-                   R"("username":"Alice","isAdmin":false},)"
-                   R"("devicePass":"dev-pass-1","apiVersion":1})";
+            if (fail_login_) {
+                status = "401 Unauthorized";
+                body = R"({"code":"INVALID_CREDENTIALS","message":"bad credentials"})";
+            } else {
+                body = R"({"token":"tok-test-1","user":{"id":"user-1",)"
+                       R"("username":"Alice","isAdmin":false},)"
+                       R"("devicePass":"dev-pass-1","apiVersion":1})";
+            }
         } else if (path == "/api/tool/v1/me") {
             body = R"({"user":{"id":"user-1","username":"Alice","isAdmin":false},)"
                    R"("serverTime":"2026-10-20T02:00:00.000Z","apiVersion":1})";
@@ -400,6 +420,8 @@ private:
     SSL_CTX *context_ = nullptr;
     std::string rotate_path_;
     TestCertificate rotate_certificate_;
+    std::atomic<bool> fail_login_{false};
+    std::atomic<bool> drop_login_{false};
     std::atomic<int> authenticated_requests_{0};
     std::atomic<bool> stopping_{false};
     std::mutex mutex_;
@@ -814,6 +836,78 @@ int main() {
             kPasswordLine);
         CHECK_EQ(set_proxy.code, 0);
         CHECK(contains(set_proxy.out, "proxy set"));
+    }
+
+    {
+        LoopbackServer server;
+        CHECK(server.ok());
+        server.drop_login(true);
+        if (server.ok()) {
+            TempDir temp;
+            const std::filesystem::path account = temp.path() / "account.txt";
+            {
+                std::ofstream out(account);
+                out << "account-password\n";
+            }
+            ::chmod(account.c_str(), 0600);
+            const RunResult init = run(
+                {"init", "--config-dir", temp.path().string(),
+                 "--vault-password-stdin"},
+                kPasswordLine);
+            CHECK_EQ(init.code, 0);
+
+            const std::vector<std::string> args{
+                "login", "--server", server.url(), "--username", "Alice",
+                "--account-password-file", account.string(), "--trust-server",
+                "--vault-password-stdin", "--config-dir", temp.path().string()};
+            const std::filesystem::path vault = temp.path() / "vault.hrtv";
+            const std::string master = "correct horse battery staple";
+
+            /* A transport failure is not a credential failure: it must not
+               start the local pause. */
+            const RunResult network_error = run(args, kPasswordLine);
+            CHECK_EQ(network_error.code, 4);
+            CHECK(!contains(network_error.err, "LOGIN_COOLDOWN"));
+            {
+                VaultSession session = Vault::unlock(vault, master);
+                CHECK_EQ(session.data.last_login_failed_at,
+                         static_cast<int64_t>(0));
+            }
+
+            server.drop_login(false);
+            server.fail_login(true);
+            const RunResult first = run(args, kPasswordLine);
+            CHECK_EQ(first.code, 3);
+            CHECK(contains(first.err, "INVALID_CREDENTIALS"));
+            CHECK(!contains(first.err, "LOGIN_COOLDOWN"));
+
+            /* The next invocation is refused locally, without another login
+               request, until the 60-second window has passed. */
+            const RunResult second = run(args, kPasswordLine);
+            CHECK_EQ(second.code, 3);
+            CHECK(contains(second.err, "LOGIN_COOLDOWN"));
+
+            {
+                VaultSession session = Vault::unlock(vault, master);
+                session.data.last_login_failed_at = test_now_ms() - 61000;
+                Vault::save(vault, session.data, master);
+            }
+            const RunResult third = run(args, kPasswordLine);
+            CHECK_EQ(third.code, 3);
+            CHECK(contains(third.err, "INVALID_CREDENTIALS"));
+            CHECK(!contains(third.err, "LOGIN_COOLDOWN"));
+
+            server.fail_login(false);
+            {
+                VaultSession session = Vault::unlock(vault, master);
+                session.data.last_login_failed_at = test_now_ms() - 61000;
+                Vault::save(vault, session.data, master);
+            }
+            const RunResult success = run(args, kPasswordLine);
+            CHECK_EQ(success.code, 0);
+            const VaultSession session = Vault::unlock(vault, master);
+            CHECK_EQ(session.data.last_login_failed_at, static_cast<int64_t>(0));
+        }
     }
 #endif
 

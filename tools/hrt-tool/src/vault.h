@@ -19,6 +19,8 @@ struct VaultData {
     std::string proxy;
     nlohmann::json trust = nlohmann::json::object();
     bool opsec_ack = false;
+    /* Milliseconds since the epoch; 0 means no recent failed login. */
+    int64_t last_login_failed_at = 0;
     int64_t created_at = 0;
     int64_t updated_at = 0;
 };

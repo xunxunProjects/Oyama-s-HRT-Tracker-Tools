@@ -193,6 +193,38 @@ int64_t now_ms() {
         .count();
 }
 
+/* Hardcoded by design: a failed credential attempt buys a one-minute pause,
+   so an interactive user cannot hammer the account. The server still owns
+   the real rate limit; this is a local guard. */
+constexpr int64_t kLoginFailureCooldownMs = 60 * 1000;
+
+void enforce_login_cooldown(const VaultData &data) {
+    if (data.last_login_failed_at <= 0) {
+        return;
+    }
+    const int64_t now = now_ms();
+    /* A clock that moved backwards must not lock the vault forever. */
+    if (now < data.last_login_failed_at) {
+        return;
+    }
+    const int64_t elapsed = now - data.last_login_failed_at;
+    if (elapsed >= kLoginFailureCooldownMs) {
+        return;
+    }
+    const int64_t seconds =
+        (kLoginFailureCooldownMs - elapsed + 999) / 1000;
+    throw ToolError(ExitCode::Vault, "LOGIN_COOLDOWN",
+                    "a login attempt failed recently; try again in " +
+                        std::to_string(seconds) + " seconds");
+}
+
+void save_login_failure(UnlockedVault &unlocked, const ParsedArgs &parsed) {
+    unlocked.session.data.last_login_failed_at = now_ms();
+    unlocked.session.data.updated_at = now_ms();
+    const Paths paths = resolve_paths(parsed.options.config_dir);
+    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+}
+
 std::string format_iso(int64_t seconds) {
     const std::time_t at = static_cast<std::time_t>(seconds);
     std::tm tm{};
@@ -490,6 +522,7 @@ int command_version(const ParsedArgs &parsed, std::ostream &out) {
 int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                   std::ostream &err) {
     UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    enforce_login_cooldown(unlocked.session.data);
     const std::string username = read_username(parsed, in, out);
     const std::string server = server_for(parsed, unlocked.session.data);
     /* Decide trust before the account password is typed or sent. */
@@ -507,23 +540,29 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     std::unique_ptr<ApiClient> client = make_api_client(server, http);
     LoginResult result;
     try {
-        result = client->login(username, password, "", "", device_pass);
-    } catch (const ApiTwoFactorRequired &required) {
-        const bool passkey = required.method() == "passkey";
-        const std::string code = read_password(
-            in, out, passkey ? "Backup code: " : "2FA code (or backup code): ",
-            false, true);
-        const bool numeric =
-            code.size() == 6 &&
-            std::all_of(code.begin(), code.end(),
-                        [](char c) { return c >= '0' && c <= '9'; });
-        if (!passkey && numeric) {
-            result = client->login(username, password, code, "", device_pass);
-        } else {
-            result = client->login(username, password, "", code, device_pass);
+        try {
+            result = client->login(username, password, "", "", device_pass);
+        } catch (const ApiTwoFactorRequired &required) {
+            const bool passkey = required.method() == "passkey";
+            const std::string code = read_password(
+                in, out, passkey ? "Backup code: " : "2FA code (or backup code): ",
+                false, true);
+            const bool numeric =
+                code.size() == 6 &&
+                std::all_of(code.begin(), code.end(),
+                            [](char c) { return c >= '0' && c <= '9'; });
+            if (!passkey && numeric) {
+                result = client->login(username, password, code, "", device_pass);
+            } else {
+                result = client->login(username, password, "", code, device_pass);
+            }
         }
+    } catch (const ApiAuthError &) {
+        save_login_failure(unlocked, parsed);
+        throw;
     }
 
+    unlocked.session.data.last_login_failed_at = 0;
     const std::array<uint8_t, 32> key =
         derive_cloud_key(password, result.user_id);
     if (!unlocked.session.data.server.empty() &&

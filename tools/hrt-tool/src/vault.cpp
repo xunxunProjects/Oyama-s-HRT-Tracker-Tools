@@ -200,6 +200,7 @@ nlohmann::json to_json(const VaultData &data) {
         {"proxy", data.proxy},
         {"trust", data.trust},
         {"opsec_ack", data.opsec_ack},
+        {"last_login_failed_at", data.last_login_failed_at},
         {"created_at", data.created_at},
         {"updated_at", data.updated_at},
     };
@@ -227,6 +228,8 @@ VaultData from_json(const nlohmann::json &value) {
         data.trust = nlohmann::json::object();
     }
     data.opsec_ack = value.value("opsec_ack", false);
+    data.last_login_failed_at =
+        value.value("last_login_failed_at", static_cast<int64_t>(0));
     data.created_at = value.value("created_at", static_cast<int64_t>(0));
     data.updated_at = value.value("updated_at", static_cast<int64_t>(0));
     return data;

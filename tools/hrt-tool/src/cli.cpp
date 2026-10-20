@@ -200,7 +200,7 @@ void print_help(std::ostream &out) {
         << "  --snapshot FILE  --mode transfem|transmasc  --utc\n"
         << "  --user-id ID  --account-password-file FILE  --account-password-stdin\n\n"
         << "Command flags:\n"
-        << "  login --username USER\n"
+        << "  login --username USER  (a failed credential attempt pauses login 60s)\n"
         << "  snapshot pull --out FILE [--id ID] [--force]\n"
         << "  snapshot push --in FILE\n"
         << "  look --all  --at OFFSETS  --labs N  --json\n\n"

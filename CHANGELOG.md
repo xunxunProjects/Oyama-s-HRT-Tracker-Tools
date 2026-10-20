@@ -38,6 +38,9 @@
   per-install device keys, disposable-VM device handling, proxy DNS rules,
   the hrt/HTTPS fallback warning, data retention, and the security
   non-guarantees.
+- A failed credential login is recorded in the encrypted vault and blocks
+  another login attempt for 60 seconds. Server-side rate limiting remains
+  the authoritative control.
 
 ## 0.1.0 — 2026-10-19 (pre-release)
 

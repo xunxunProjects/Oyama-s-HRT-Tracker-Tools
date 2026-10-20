@@ -289,7 +289,10 @@ it covers persistent vaults, per-install device keys, proxy DNS, the
   compromised worker or request log can derive the key. The "server cannot read
   health data" property holds for an honest-but-curious server that follows the
   protocol; it does not survive a compromised endpoint. Do not reuse a password
-  from another service.
+  from another service. A failed credential attempt stores a timestamp in the
+  encrypted vault and refuses another login for 60 seconds; the server still
+  enforces its own rate limits, because a modified client can skip the local
+  pause.
 - The tool does not call `system`, `popen`, `exec`, `dlopen`, or a shell, and
   never executes or evaluates server-provided content. Server strings are data.
 - HTTPS is required for ordinary remote servers. Plain `http://` is accepted
