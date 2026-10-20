@@ -2,6 +2,7 @@
 #include "test_framework.h"
 
 #include <nlohmann/json.hpp>
+#include <cmath>
 #include <string>
 
 using nlohmann::json;
@@ -207,6 +208,113 @@ int main() {
         missing.erase("mode");
         CHECK(!declared_mode(missing).has_value());
         CHECK(active_mode(missing) == ModeKey::Transfem);
+    }
+
+    /* cleanDoseMG parity with the website (src/utils/cleanDose.ts): a value
+       within 0.01% of a whole microgram snaps to it; otherwise six
+       significant figures. */
+    {
+        CHECK_EQ(clean_dose_mg(12.499934062706513), 12.5);
+        CHECK_EQ(clean_dose_mg(12.5), 12.5);
+        CHECK_EQ(clean_dose_mg(0.0), 0.0);
+        CHECK(std::abs(clean_dose_mg(0.0375) - 0.0375) < 1e-15);
+        CHECK(std::abs(clean_dose_mg(1.23456789) - 1.23457) < 1e-12);
+        CHECK(std::isinf(clean_dose_mg(INFINITY)));
+    }
+
+    {
+        json payload = base_payload();
+        payload["modes"]["transfem"]["events"] = json::array(
+            {event("e1", "EV", 12.499934062706513, 100, 1000)});
+        const json sanitized = sanitize_import_payload(payload, nullptr);
+        const json *cleaned = find_event(sanitized, "transfem", "e1");
+        CHECK(cleaned != nullptr);
+        CHECK_EQ((*cleaned)["doseMG"].get<double>(), 12.5);
+    }
+
+    {
+        json clean = base_payload();
+        clean["modes"]["transfem"]["events"] =
+            json::array({event("e1", "EV", 12.5, 100, 1000)});
+        json dirty = base_payload();
+        dirty["modes"]["transfem"]["events"] =
+            json::array({event("e1", "EV", 12.499934062706513, 100, 1000)});
+        CHECK_EQ(fingerprint_state(normalize_sync_state(clean)),
+                 fingerprint_state(normalize_sync_state(dirty)));
+    }
+
+    /* birthYear mirrors syncMerge.ts: integer 1900..current year; present but
+       implausible reads as an explicit null, absent stays unstated. */
+    {
+        json payload = base_payload();
+        payload["birthYear"] = 1990;
+        payload["birthYearUpdatedAt"] = 500;
+        SyncState state = normalize_sync_state(payload);
+        CHECK(state.birth_year.has_value());
+        CHECK_EQ(state.birth_year->get<int64_t>(), 1990);
+        CHECK_EQ(state.birth_year_updated_at, static_cast<int64_t>(500));
+
+        for (const json &bad : {json(1800), json(3000), json(1990.5),
+                                json("1990")}) {
+            json invalid = base_payload();
+            invalid["birthYear"] = bad;
+            invalid["birthYearUpdatedAt"] = 600;
+            state = normalize_sync_state(invalid);
+            CHECK(state.birth_year.has_value());
+            CHECK(state.birth_year->is_null());
+            CHECK_EQ(state.birth_year_updated_at, static_cast<int64_t>(600));
+        }
+
+        json explicit_null = base_payload();
+        explicit_null["birthYear"] = nullptr;
+        explicit_null["birthYearUpdatedAt"] = 700;
+        state = normalize_sync_state(explicit_null);
+        CHECK(state.birth_year.has_value());
+        CHECK(state.birth_year->is_null());
+        CHECK_EQ(state.birth_year_updated_at, static_cast<int64_t>(700));
+
+        state = normalize_sync_state(base_payload());
+        CHECK(!state.birth_year.has_value());
+        CHECK_EQ(state.birth_year_updated_at, static_cast<int64_t>(0));
+    }
+
+    {
+        json payload = base_payload();
+        payload["birthYear"] = nullptr;
+        payload["birthYearUpdatedAt"] = 600;
+        json out = to_sync_payload(normalize_sync_state(payload), json::object());
+        CHECK(out.contains("birthYear"));
+        CHECK(out["birthYear"].is_null());
+        CHECK_EQ(out["birthYearUpdatedAt"].get<int64_t>(), 600);
+
+        out = to_sync_payload(normalize_sync_state(base_payload()), json::object());
+        CHECK(!out.contains("birthYear"));
+        CHECK(!out.contains("birthYearUpdatedAt"));
+    }
+
+    {
+        json local = base_payload();
+        local["birthYear"] = 1990;
+        local["birthYearUpdatedAt"] = 1000;
+        json remote = base_payload();
+        remote["birthYear"] = 1985;
+        remote["birthYearUpdatedAt"] = 2000;
+        MergeResult result = merge_sync_payloads(local, remote);
+        CHECK_EQ(result.payload["birthYear"].get<int64_t>(), 1985);
+        CHECK_EQ(result.payload["birthYearUpdatedAt"].get<int64_t>(), 2000);
+
+        remote["birthYear"] = nullptr;
+        remote["birthYearUpdatedAt"] = 3000;
+        result = merge_sync_payloads(local, remote);
+        CHECK(result.payload["birthYear"].is_null());
+        CHECK_EQ(result.payload["birthYearUpdatedAt"].get<int64_t>(), 3000);
+
+        json unstated = base_payload();
+        result = merge_sync_payloads(unstated, local);
+        CHECK_EQ(result.payload["birthYear"].get<int64_t>(), 1990);
+
+        CHECK(fingerprint_state(normalize_sync_state(local)) !=
+              fingerprint_state(normalize_sync_state(remote)));
     }
 
     return test_result();

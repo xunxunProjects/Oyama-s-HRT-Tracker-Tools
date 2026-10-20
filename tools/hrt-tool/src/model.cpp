@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -21,6 +22,35 @@ namespace {
 
 bool is_protected_id(const std::string &id) {
     return id == "__proto__" || id == "constructor" || id == "prototype";
+}
+
+int current_year() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    return local.tm_year + 1900;
+}
+
+bool is_plausible_birth_year(const nlohmann::json &value) {
+    if (!value.is_number()) {
+        return false;
+    }
+    const double year = value.get<double>();
+    return std::isfinite(year) && std::floor(year) == year && year >= 1900.0 &&
+           year <= static_cast<double>(current_year());
+}
+
+/* Present but implausible reads as an explicit "none", exactly like
+   syncMerge.ts: isPlausibleBirthYear decides, and the value becomes null. */
+nlohmann::json normalized_birth_year(const nlohmann::json &value) {
+    if (!is_plausible_birth_year(value)) {
+        return nlohmann::json(nullptr);
+    }
+    return nlohmann::json(static_cast<int64_t>(value.get<double>()));
 }
 
 int64_t as_timestamp(const nlohmann::json &value) {
@@ -115,7 +145,13 @@ std::string content_fingerprint(RecordKind kind, const nlohmann::json &record) {
             result.push_back('|');
         }
         if (record.is_object() && record.contains(fields[i])) {
-            result += stable_string(record.at(fields[i]));
+            const nlohmann::json &value = record.at(fields[i]);
+            if (std::string(fields[i]) == "doseMG" && value.is_number()) {
+                result += stable_string(
+                    nlohmann::json(clean_dose_mg(value.get<double>())));
+            } else {
+                result += stable_string(value);
+            }
         }
     }
     return result;
@@ -447,7 +483,7 @@ std::optional<nlohmann::json> sanitize_event(const nlohmann::json &record) {
     out["ester"] = valid_ester_code(record.value("ester", nlohmann::json()))
                        ? record.at("ester")
                        : nlohmann::json("E2");
-    out["doseMG"] = dose;
+    out["doseMG"] = clean_dose_mg(dose);
     out["timeH"] = *time;
     out["extras"] = record.contains("extras") && record.at("extras").is_object()
                         ? record.at("extras")
@@ -505,7 +541,7 @@ std::optional<nlohmann::json> sanitize_template(const nlohmann::json &record) {
                       : nlohmann::json("Template");
     out["route"] = record.at("route");
     out["ester"] = record.at("ester");
-    out["doseMG"] = *dose;
+    out["doseMG"] = clean_dose_mg(*dose);
     out["extras"] = record.contains("extras") && record.at("extras").is_object()
                         ? record.at("extras")
                         : nlohmann::json::object();
@@ -553,6 +589,23 @@ nlohmann::json sanitize_records(RecordKind kind, const nlohmann::json &records,
 }
 
 } // namespace
+
+double clean_dose_mg(double mg) {
+    if (!std::isfinite(mg) || mg == 0.0) {
+        return mg;
+    }
+    const double micrograms = std::round(mg * 1000.0) / 1000.0;
+    if (micrograms != 0.0 && std::abs(micrograms - mg) <= std::abs(mg) * 1e-4) {
+        return micrograms;
+    }
+    const double magnitude = std::abs(mg);
+    const int exponent = static_cast<int>(std::floor(std::log10(magnitude)));
+    const double factor = std::pow(10.0, 5 - exponent);
+    if (!std::isfinite(factor) || !std::isfinite(mg * factor)) {
+        return mg;
+    }
+    return std::round(mg * factor) / factor;
+}
 
 const char *mode_key_name(ModeKey mode) {
     return mode == ModeKey::Transmasc ? "transmasc" : "transfem";
@@ -700,6 +753,14 @@ SyncState normalize_sync_state(const nlohmann::json &payload) {
             }
         }
     }
+    if (payload.contains("birthYear")) {
+        state.birth_year = normalized_birth_year(payload.at("birthYear"));
+        state.birth_year_updated_at =
+            as_timestamp(payload.value("birthYearUpdatedAt", nlohmann::json()));
+        if (state.birth_year_updated_at == 0) {
+            state.birth_year_updated_at = 1;
+        }
+    }
     if (payload.contains("pkParams")) {
         state.pk_params = payload.at("pkParams");
         state.pk_params_updated_at =
@@ -754,6 +815,16 @@ nlohmann::json to_sync_payload(const SyncState &state, const nlohmann::json &bas
         out["weightUpdatedAt"] = state.weight_updated_at;
     } else {
         out.erase("weightUpdatedAt");
+    }
+    if (state.birth_year.has_value()) {
+        out["birthYear"] = *state.birth_year;
+    } else {
+        out.erase("birthYear");
+    }
+    if (state.birth_year_updated_at > 0) {
+        out["birthYearUpdatedAt"] = state.birth_year_updated_at;
+    } else {
+        out.erase("birthYearUpdatedAt");
     }
     if (state.pk_params.has_value()) {
         out["pkParams"] = *state.pk_params;
@@ -870,6 +941,12 @@ MergeResult merge_sync_payloads(const nlohmann::json &local,
         merged.weight = weight.value->get<double>();
         merged.weight_updated_at = weight.at;
     }
+
+    const ScalarResult born =
+        resolve_scalar(local_state.birth_year, local_state.birth_year_updated_at,
+                       remote_state.birth_year, remote_state.birth_year_updated_at);
+    merged.birth_year = born.value;
+    merged.birth_year_updated_at = born.at;
 
     const ScalarResult pk =
         resolve_scalar(local_state.pk_params, local_state.pk_params_updated_at,
@@ -1053,6 +1130,10 @@ std::string fingerprint_state(const SyncState &state) {
     parts.push_back("weight:" + (state.weight.has_value()
                                      ? stable_string(nlohmann::json(*state.weight))
                                      : std::string{}));
+    parts.push_back("birthYear:" +
+                    (state.birth_year.has_value()
+                         ? stable_string(*state.birth_year)
+                         : std::string{}));
     parts.push_back("pkParams:" +
                     (state.pk_params.has_value() ? stable_string(*state.pk_params)
                                                  : std::string{}));

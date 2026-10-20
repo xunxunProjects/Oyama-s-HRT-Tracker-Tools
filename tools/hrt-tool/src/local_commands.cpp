@@ -943,7 +943,7 @@ int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         throw ToolError(ExitCode::Usage, "DOSE", "pass --measurement (for example 2mg)");
     }
     const int ester = parse_ester(drug);
-    const double dose = parse_dose_mg(dose_text);
+    const double dose = clean_dose_mg(parse_dose_mg(dose_text));
     const double time_h = parse_time_hours(time_text, parsed.options.utc);
     int route = default_route(ester);
     if (flags.values.count("--route") != 0) {
@@ -1059,9 +1059,11 @@ int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
                 parse_time_hours(flags.values.at("--time"), parsed.options.utc);
         }
         if (flags.values.count("--measurement") != 0) {
-            (*record)["doseMG"] = parse_dose_mg(flags.values.at("--measurement"));
+            (*record)["doseMG"] =
+                clean_dose_mg(parse_dose_mg(flags.values.at("--measurement")));
         } else if (flags.values.count("--dose") != 0) {
-            (*record)["doseMG"] = parse_dose_mg(flags.values.at("--dose"));
+            (*record)["doseMG"] =
+                clean_dose_mg(parse_dose_mg(flags.values.at("--dose")));
         }
         (*record)["updatedAt"] = now_milliseconds();
         clear_tombstone(payload, mode, RecordKind::Events, id);

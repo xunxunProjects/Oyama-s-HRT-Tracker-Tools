@@ -535,6 +535,21 @@ int main() {
         }
         CHECK(fraction_ok);
 
+        std::vector<std::string> cleaned{
+            "add", "--drug", "EV", "--time", "now", "--measurement",
+            "12.499934062706513mg"};
+        cleaned.insert(cleaned.end(), base.begin(), base.end());
+        CHECK_EQ(run(cleaned).code, 0);
+        const json cleaned_events = json::parse(run(list_args).out, nullptr, false);
+        CHECK(!cleaned_events.is_discarded());
+        bool cleaned_ok = false;
+        for (const json &event : cleaned_events) {
+            if (event.value("doseMG", 0.0) == 12.5) {
+                cleaned_ok = true;
+            }
+        }
+        CHECK(cleaned_ok);
+
         std::vector<std::string> junk{"add", "--drug", "EV", "--time",
                                       "2026-10-19T22:50:30Z junk", "--measurement",
                                       "2mg"};

@@ -111,10 +111,21 @@ are not deleted.
 
 Imports are sanitised the way the website sanitises them: unknown routes and
 out-of-range event times are dropped (and counted in the output), doses are
-clamped to `0..10000 mg`, weights to `20..400 kg`, invalid lab units default
-to `pmol/l`, and records without an id get one. Payloads larger than 16 MiB
-or with more than 20,000 records per array are refused. Naked v1 event arrays
+clamped to `0..10000 mg` and cleaned with the website's `cleanDoseMG` rule
+(float tails within 0.01% of a whole microgram snap to it, otherwise six
+significant figures), weights to `20..400 kg`, invalid lab units default to
+`pmol/l`, and records without an id get one. Payloads larger than 16 MiB or
+with more than 20,000 records per array are refused. Naked v1 event arrays
 are accepted alongside v1 flat objects and v2 `modes` payloads.
+
+The sync merge treats `weight`, `birthYear` and `pkParams` as last-write-wins
+scalars with their own `*UpdatedAt` timestamps. `birthYear` is validated as an
+integer in `1900..current year`; a present but implausible value is read as
+"none" (`null`), matching the website. Doses are compared by their cleaned
+value, so a float tail and its tidied copy are not reported as a conflict.
+The tool preserves and merges `birthYear`, but `look` does not apply the
+website's age-based clearance adjustment yet; it remains in the encrypted
+payload and is never printed.
 
 Mutating local commands take an advisory lock on `<snapshot>.lock` and hold it
 across read-modify-write, so concurrent `add`/`import` processes cannot lose

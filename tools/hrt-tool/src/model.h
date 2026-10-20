@@ -40,6 +40,10 @@ struct SyncState {
     std::array<ModeBlock, 2> modes;
     std::optional<double> weight;
     int64_t weight_updated_at = 0;
+    /* Year of birth; nullopt = the payload said nothing, a JSON null =
+       explicitly cleared. Plausibility is checked during normalization. */
+    std::optional<nlohmann::json> birth_year;
+    int64_t birth_year_updated_at = 0;
     /* nullopt = the payload said nothing; a JSON null = explicitly cleared. */
     std::optional<nlohmann::json> pk_params;
     int64_t pk_params_updated_at = 0;
@@ -71,8 +75,9 @@ struct ImportSanitizeReport {
 /*
  * Applies the website's import sanitizers (backupState.ts): unknown routes
  * and out-of-range event times are dropped, doses are clamped to
- * [0, 10000] mg, invalid esters default to E2, invalid lab units default to
- * pmol/l, weights are clamped to [20, 400] kg, and missing ids get one.
+ * [0, 10000] mg and cleaned with cleanDoseMG, invalid esters default to E2,
+ * invalid lab units default to pmol/l, weights are clamped to
+ * [20, 400] kg, and missing ids get one.
  */
 nlohmann::json sanitize_import_payload(const nlohmann::json &payload,
                                        ImportSanitizeReport *report);
@@ -89,6 +94,11 @@ struct MergeOptions {
 SyncState normalize_sync_state(const nlohmann::json &payload);
 nlohmann::json to_sync_payload(const SyncState &state, const nlohmann::json &base);
 nlohmann::json normalize_sync_payload(const nlohmann::json &payload);
+
+/* Mirrors the website's cleanDoseMG (src/utils/cleanDose.ts): a value within
+   0.01% of a whole microgram snaps to it, otherwise six significant figures.
+   Keeps the tool and the website byte-compatible when merging doses. */
+double clean_dose_mg(double mg);
 
 MergeResult merge_sync_payloads(const nlohmann::json &local,
                                 const nlohmann::json &remote,

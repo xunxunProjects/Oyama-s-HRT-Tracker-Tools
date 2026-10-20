@@ -14,6 +14,12 @@
 - Live `/api/tool/v1` client: `login`, `logout`, `whoami`,
   `snapshot pull|push|list`, remote `look`, with origin-bound tokens,
   conditional snapshot writes, and conflict retry.
+- Sync parity with the website's current v2 payload: `birthYear` and
+  `birthYearUpdatedAt` are validated, merged last-write-wins, and included
+  in change fingerprints; doses are cleaned with the website's
+  `cleanDoseMG` rule on add/edit/import and compared by the cleaned value.
+  The encrypted payload keeps the year of birth; `look` does not apply the
+  age-based clearance model yet.
 - First-contact SPKI SHA-256 pinning stored in the encrypted vault:
   interactive `yes` pins, `--trust-server` persists non-interactively,
   `--yes` trusts for the current run only, and a changed pin is refused
