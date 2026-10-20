@@ -690,8 +690,8 @@ HrtServerCertificate HrtClient::connect() {
     if (SSL_connect(impl_->ssl) != 1) {
         const std::string detail = openssl_error();
         impl_->close();
-        throw ToolError(ExitCode::Network, "HRT_TLS",
-                        "TLS handshake failed: " + detail);
+        throw NetworkFailure("HRT_TLS", "TLS handshake failed: " + detail,
+                             FailureKind::TunnelInterrupted);
     }
     const unsigned char *selected = nullptr;
     unsigned int selected_length = 0;
@@ -722,7 +722,7 @@ HrtServerCertificate HrtClient::connect() {
     if (!impl_->options.expected_spki.empty() &&
         impl_->certificate.spki_sha256 != impl_->options.expected_spki) {
         impl_->close();
-        throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+        throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                         "the raw server public-key pin changed");
     }
     impl_->connected = true;
@@ -753,7 +753,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int written = SSL_write(impl_->ssl, frame.data() + offset,
                                       static_cast<int>(frame.size() - offset));
         if (written <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot write the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot write the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         offset += static_cast<size_t>(written);
     }
@@ -763,7 +764,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int got = SSL_read(impl_->ssl, header + read,
                                  static_cast<int>(sizeof(header) - read));
         if (got <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot read the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot read the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         read += static_cast<size_t>(got);
     }
@@ -780,7 +782,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int got = SSL_read(impl_->ssl, &payload[read],
                                  static_cast<int>(payload.size() - read));
         if (got <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot read the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot read the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         read += static_cast<size_t>(got);
     }

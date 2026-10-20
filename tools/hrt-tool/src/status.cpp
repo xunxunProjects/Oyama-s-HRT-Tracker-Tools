@@ -13,9 +13,26 @@ nlohmann::json build_status_view(const ParsedArgs &parsed,
                                  std::ostream &err) {
     const CommandFlags flags =
         parse_command_flags(parsed.command_args, {"--at", "--labs", "--watch"}, {});
-    const auto offsets = parse_offsets(flags);
+    std::vector<std::pair<std::string, double>> offsets = parse_offsets(flags);
+    if (!all && flags.values.count("--at") == 0 && offsets.size() > 4) {
+        offsets.resize(4);
+    }
 
     ParsedArgs view_args = parsed;
+    std::vector<std::string> filtered;
+    filtered.reserve(view_args.command_args.size());
+    for (size_t i = 0; i < view_args.command_args.size(); ++i) {
+        const std::string &token = view_args.command_args[i];
+        if (token == "--watch") {
+            ++i; // skip the value too
+            continue;
+        }
+        if (token.rfind("--watch=", 0) == 0) {
+            continue;
+        }
+        filtered.push_back(token);
+    }
+    view_args.command_args = std::move(filtered);
     if (all && std::find(view_args.command_args.begin(), view_args.command_args.end(),
                          "--all") == view_args.command_args.end()) {
         view_args.command_args.push_back("--all");

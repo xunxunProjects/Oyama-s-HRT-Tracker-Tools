@@ -92,7 +92,7 @@ void check_permissions(const std::filesystem::path &path) {
                         "cannot stat the vault: " + std::string(std::strerror(errno)));
     }
     if ((info.st_mode & 0077) != 0) {
-        throw ToolError(ExitCode::Vault, "VAULT_PERMISSIONS",
+        throw ToolError(ExitCode::Permission, "VAULT_PERMISSIONS",
                         "vault must not be group- or world-accessible; chmod 0600 it");
     }
 #endif
@@ -524,6 +524,20 @@ void VaultSession::wipe() {
     wipe_string(data.username);
     wipe_string(data.device_pass);
     wipe_string(data.cloud_key);
+    wipe_string(data.device_key_pem);
+    wipe_string(data.device_cert_pem);
+    wipe_string(data.device_fingerprint);
+    for (auto &entry : data.links) {
+        LinkData &link = entry.second;
+        wipe_string(link.token);
+        wipe_string(link.user_id);
+        wipe_string(link.username);
+        wipe_string(link.device_pass);
+        wipe_string(link.cloud_key);
+        wipe_string(link.device_key_pem);
+        wipe_string(link.device_cert_pem);
+        wipe_string(link.device_fingerprint);
+    }
     hrtcore_secure_zero(key.data(), key.size());
     hrtcore_secure_zero(log_key.data(), log_key.size());
     key.fill(0);

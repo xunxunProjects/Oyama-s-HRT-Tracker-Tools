@@ -16,6 +16,7 @@ struct SessionContext {
     std::string master;
     bool loaded = false;
     std::function<void(const std::string &)> progress;
+    ~SessionContext();
 };
 
 /* Owner-or-view over a vault session. When a SessionContext is supplied, the

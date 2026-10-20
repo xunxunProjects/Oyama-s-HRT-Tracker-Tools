@@ -72,6 +72,22 @@ int main() {
     TempDir temp;
     CHECK_EQ(run(temp.path().string(), temp.pass(), {"init"}).code, 0);
 
+    RunResult bad_key =
+        run(temp.path().string(), temp.pass(), {"config", "set", "bogus", "x"});
+    CHECK_EQ(bad_key.code, static_cast<int>(ExitCode::Config));
+    CHECK(contains(bad_key.err, "CONFIG_KEY"));
+
+    RunResult reserved = run(temp.path().string(), temp.pass(),
+                             {"config", "set", "transport", "tls"});
+    CHECK_EQ(reserved.code, static_cast<int>(ExitCode::NotImplemented));
+    CHECK(contains(reserved.err, "TRANSPORT_SELECTION"));
+
+    RunResult probe = run(temp.path().string(), temp.pass(),
+                          {"add-link", "http://127.0.0.1:1", "probe", "--probe"});
+    CHECK(probe.code == static_cast<int>(ExitCode::Network) ||
+          probe.code == static_cast<int>(ExitCode::Trust));
+    CHECK(probe.err.find("[URL]") == std::string::npos);
+
     RunResult added =
         run(temp.path().string(), temp.pass(),
             {"add-link", "hrt://127.0.0.1:9443", "mtf", "--mode", "transfem"});
@@ -103,17 +119,29 @@ int main() {
     CHECK_EQ(mode.code, 0);
     CHECK(contains(mode.out, "mode: transfem"));
 
+    RunResult active_remove = run(temp.path().string(), temp.pass(),
+                                  {"link", "remove", "mtf", "--yes"});
+    CHECK_EQ(active_remove.code, static_cast<int>(ExitCode::Conflict));
+    CHECK(contains(active_remove.err, "LINK_ACTIVE"));
+
+    /* Replacing the active link must not silently keep the old session or
+       print success while the old record is written back. */
+    RunResult forced = run(temp.path().string(), temp.pass(),
+                           {"add-link", "https://b.example", "mtf", "--force"});
+    CHECK_EQ(forced.code, 0);
+    RunResult forced_show = run(temp.path().string(), temp.pass(),
+                                {"link", "show", "mtf"});
+    CHECK(contains(forced_show.out, "https://b.example"));
+    CHECK(contains(forced_show.out, "token: empty"));
+    RunResult forced_active = run(temp.path().string(), temp.pass(),
+                                  {"config", "get", "active-link"});
+    CHECK(contains(forced_active.out, "active-link: (base)"));
+
     RunResult renamed = run(temp.path().string(), temp.pass(),
                             {"link", "rename", "mtf", "main"});
     CHECK_EQ(renamed.code, 0);
     CHECK(contains(renamed.out, "main"));
 
-    RunResult active_remove = run(temp.path().string(), temp.pass(),
-                                  {"link", "remove", "main", "--yes"});
-    CHECK_EQ(active_remove.code, static_cast<int>(ExitCode::Conflict));
-    CHECK(contains(active_remove.err, "LINK_ACTIVE"));
-
-    CHECK_EQ(run(temp.path().string(), temp.pass(), {"commit-server", "-"}).code, 0);
     RunResult removed = run(temp.path().string(), temp.pass(),
                             {"link", "remove", "main", "--yes"});
     CHECK_EQ(removed.code, 0);

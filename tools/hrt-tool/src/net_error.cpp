@@ -1,5 +1,6 @@
 #include "net_error.h"
 
+#include <atomic>
 #include <cerrno>
 #include <curl/curl.h>
 
@@ -89,6 +90,29 @@ bool should_retry(FailureKind kind, bool is_read, bool debug, int attempts) {
 
 bool should_print_human_line(bool debug, bool trace, bool no_humor, bool humor) {
     return !debug && !trace && !no_humor && humor;
+}
+
+namespace {
+std::atomic<bool> g_humor{true};
+}
+
+void set_humor_enabled(bool enabled) { g_humor.store(enabled); }
+bool humor_enabled() { return g_humor.load(); }
+
+std::string mutation_check_hint(const std::string &command) {
+    if (command == "lab") {
+        return "the write may have been applied; run 'hrt-tool lab list' before "
+               "retrying";
+    }
+    if (command == "weight") {
+        return "the write may have been applied; run 'hrt-tool weight get' "
+               "before retrying";
+    }
+    if (command == "add" || command == "dose") {
+        return "the write may have been applied; run 'hrt-tool dose list' "
+               "before retrying";
+    }
+    return "the write may have been applied; check the account before retrying";
 }
 
 std::string failure_human_line(Language language, FailureKind kind) {

@@ -55,6 +55,10 @@ jobs:
         run: go mod download
         working-directory: tools/hrt-f2f
 
+      - name: Go F2F tests
+        run: GOPROXY=off go test -count=1 ./...
+        working-directory: tools/hrt-f2f
+
       - name: Configure
         run: cmake -S tools/hrt-tool -B tools/hrt-tool/build -DCMAKE_BUILD_TYPE=Release
 

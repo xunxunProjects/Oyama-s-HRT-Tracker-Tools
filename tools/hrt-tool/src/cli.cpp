@@ -280,6 +280,46 @@ void print_help(std::ostream &out) {
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
 
+void print_command_help(const std::string &command, std::ostream &out) {
+    if (command == "status") {
+        out << "usage: hrt-tool status [all] [--at LIST] [--labs N] "
+               "[--watch SECONDS] [--json]\n";
+    } else if (command == "add") {
+        out << "usage: hrt-tool add --drug NAME --time TIME --measurement DOSE "
+               "[--route ROUTE]\n"
+               "       hrt-tool add dose        interactive interview\n";
+    } else if (command == "look") {
+        out << "usage: hrt-tool look [--all] [--at LIST] [--labs N] [--json]\n";
+    } else if (command == "add-link") {
+        out << "usage: hrt-tool add-link URL NAME [--mode M] [--proxy P] "
+               "[--force] [--probe]\n";
+    } else if (command == "commit-server") {
+        out << "usage: hrt-tool commit-server NAME   (use - for the base link)\n";
+    } else if (command == "link") {
+        out << "usage: hrt-tool link list|show NAME|rename OLD NEW|remove NAME "
+               "[--yes] [--force]\n";
+    } else if (command == "proxy") {
+        out << "usage: hrt-tool proxy tor|i2p|off|status|test\n";
+    } else if (command == "config") {
+        out << "usage: hrt-tool config get|set|unset KEY [VALUE] | config path\n";
+    } else if (command == "snapshot") {
+        out << "usage: hrt-tool snapshot pull --out FILE | push --in FILE | list\n";
+    } else if (command == "f2f") {
+        out << "usage: hrt-tool f2f keygen|login|register|status|keyring|"
+               "encrypt|decrypt|version ...\n";
+    } else if (command == "doctor") {
+        out << "usage: hrt-tool doctor [--json]\n";
+    } else if (command == "completion") {
+        out << "usage: hrt-tool completion bash|zsh|fish\n";
+    } else if (command == "help") {
+        out << "usage: hrt-tool help [COMMAND|exit-codes]\n";
+    } else if (command == "console") {
+        out << "usage: hrt-tool console\n";
+    } else {
+        print_help(out);
+    }
+}
+
 int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &out,
             std::ostream &err) {
     ParsedArgs parsed;
@@ -288,14 +328,22 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
             return run_console(GlobalOptions{}, in, out, err);
         }
         parsed = parse_args(argc, argv);
-        if (parsed.help || parsed.command.empty()) {
+        if (parsed.help) {
+            if (!parsed.command.empty()) {
+                print_command_help(parsed.command, out);
+            } else {
+                print_help(out);
+            }
+            return 0;
+        }
+        if (parsed.command.empty()) {
             print_help(out);
             return 0;
         }
         return dispatch(parsed, in, out, err);
     } catch (const NetworkFailure &error) {
         if (should_print_human_line(parsed.options.debug, parsed.options.trace,
-                                    parsed.options.no_humor, true)) {
+                                    parsed.options.no_humor, humor_enabled())) {
             const std::string human =
                 failure_human_line(Language::En, error.kind());
             if (!human.empty()) {

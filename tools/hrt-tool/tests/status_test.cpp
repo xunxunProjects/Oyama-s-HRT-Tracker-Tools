@@ -43,6 +43,12 @@ int main() {
         {"unit", "pg/ml"},
         {"assay", "lcms"},
     });
+    ParsedArgs compact_args;
+    compact_args.options.utc = true;
+    const nlohmann::json compact =
+        build_status_view(compact_args, payload, false, std::cout);
+    CHECK_EQ(compact["rows"].size(), size_t{4});
+
     ParsedArgs parsed;
     parsed.options.utc = true;
     parsed.command_args = {"all"};
@@ -70,6 +76,46 @@ int main() {
     CHECK_EQ(run_cli(5, argv, command_in, command_out, command_err), 0);
     CHECK(command_out.str().find("Expected") != std::string::npos);
     CHECK(command_out.str().find("Mass spectrometry") != std::string::npos);
+
+    const char *argv_at[] = {"hrt-tool", "status", "--snapshot",
+                             snapshot.c_str(), "--at", "1h,2h"};
+    std::istringstream at_in;
+    std::ostringstream at_out;
+    std::ostringstream at_err;
+    CHECK_EQ(run_cli(6, argv_at, at_in, at_out, at_err), 0);
+    CHECK(at_out.str().find("1h") != std::string::npos);
+    CHECK(at_out.str().find("2h") != std::string::npos);
+    CHECK(at_out.str().find("30m") == std::string::npos);
+
+    const char *argv_labs[] = {"hrt-tool", "status", "--snapshot",
+                               snapshot.c_str(), "--labs", "1"};
+    std::istringstream labs_in;
+    std::ostringstream labs_out;
+    std::ostringstream labs_err;
+    CHECK_EQ(run_cli(6, argv_labs, labs_in, labs_out, labs_err), 0);
+
+    const char *argv_watch[] = {"hrt-tool", "status", "--snapshot",
+                                snapshot.c_str(), "--watch", "0"};
+    std::istringstream watch_in;
+    std::ostringstream watch_out;
+    std::ostringstream watch_err;
+    CHECK_EQ(run_cli(6, argv_watch, watch_in, watch_out, watch_err), 2);
+    CHECK(watch_err.str().find("WATCH") != std::string::npos);
+
+    const char *status_help[] = {"hrt-tool", "status", "--help"};
+    std::istringstream help_in;
+    std::ostringstream help_out;
+    std::ostringstream help_err;
+    CHECK_EQ(run_cli(3, status_help, help_in, help_out, help_err), 0);
+    CHECK(help_out.str().find("--at") != std::string::npos);
+
+    const char *help_status[] = {"hrt-tool", "help", "status"};
+    std::istringstream help_in2;
+    std::ostringstream help_out2;
+    std::ostringstream help_err2;
+    CHECK_EQ(run_cli(3, help_status, help_in2, help_out2, help_err2), 0);
+    CHECK(help_out2.str().find("--at") != std::string::npos);
+
     std::filesystem::remove(snapshot);
     return test_result();
 }

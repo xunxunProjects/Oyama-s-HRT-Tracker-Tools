@@ -2,6 +2,7 @@
 
 #include "commands.h"
 #include "error.h"
+#include "net_error.h"
 #include "paths.h"
 
 #include <openssl/crypto.h>
@@ -27,7 +28,7 @@ public:
         path_ += ".lock";
         fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         if (fd_ < 0) {
-            throw ToolError(ExitCode::Vault, "VAULT_LOCK",
+            throw ToolError(ExitCode::Permission, "VAULT_LOCK",
                             "cannot open the vault lock: " +
                                 std::string(std::strerror(errno)));
         }
@@ -38,7 +39,7 @@ public:
             const std::string detail = std::strerror(errno);
             ::close(fd_);
             fd_ = -1;
-            throw ToolError(ExitCode::Vault, "VAULT_LOCK",
+            throw ToolError(ExitCode::Permission, "VAULT_LOCK",
                             "cannot lock the vault: " + detail);
         }
 #else
@@ -62,6 +63,13 @@ private:
     int fd_ = -1;
 #endif
 };
+
+SessionContext::~SessionContext() {
+    if (!master.empty()) {
+        OPENSSL_cleanse(master.data(), master.size());
+        master.clear();
+    }
+}
 
 UnlockedVault::UnlockedVault() = default;
 UnlockedVault::~UnlockedVault() {
@@ -143,6 +151,7 @@ UnlockedVault UnlockedVault::unlock_impl(const GlobalOptions &options, std::istr
 
     std::string master = read_vault_password(options, in, out, false);
     VaultSession session = Vault::unlock(paths.vault_file, master);
+    set_humor_enabled(session.data.humor);
     if (context != nullptr) {
         context->session = std::move(session);
         context->master = std::move(master);

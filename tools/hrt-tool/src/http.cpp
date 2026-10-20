@@ -685,7 +685,7 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
         curl_easy_setopt(curl, CURLOPT_PROXY, "");
     }
 
-    if (options.trace) {
+    if (options.trace || options.debug) {
         curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
         curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debug_callback);
         curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &trace_context);
@@ -717,7 +717,7 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
            confirming the certificate we parsed. */
         if (!options.pinned_spki_sha256.empty() &&
             response.spki_sha256 != options.pinned_spki_sha256) {
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "server public-key pin did not match; refusing the "
                             "response");
         }

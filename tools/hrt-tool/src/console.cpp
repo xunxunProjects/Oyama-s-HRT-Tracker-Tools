@@ -129,9 +129,12 @@ int run_console(const GlobalOptions &options, std::istream &in, std::ostream &ou
                 std::ostream &err) {
     GlobalOptions session_options = options;
     SessionContext context;
+    UnlockedVault console_lock;
     try {
-        UnlockedVault unlocked = unlock_full(session_options, in, out, &context);
-        (void)unlocked;
+        /* Keep the vault lock for the console's lifetime so a concurrent
+           one-shot command cannot update the vault behind our in-memory
+           session. Commands that reuse the loaded context skip re-locking. */
+        console_lock = unlock_full(session_options, in, out, &context);
     } catch (const ToolError &error) {
         report_error(error, err);
         return static_cast<int>(error.exit_code());

@@ -555,7 +555,7 @@ public:
         path_ += ".lock";
         fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         if (fd_ < 0) {
-            throw ToolError(ExitCode::Vault, "SNAPSHOT_LOCK",
+            throw ToolError(ExitCode::Permission, "SNAPSHOT_LOCK",
                             "cannot open the snapshot lock: " +
                                 std::string(std::strerror(errno)));
         }
@@ -566,7 +566,7 @@ public:
             const std::string detail = std::strerror(errno);
             ::close(fd_);
             fd_ = -1;
-            throw ToolError(ExitCode::Vault, "SNAPSHOT_LOCK",
+            throw ToolError(ExitCode::Permission, "SNAPSHOT_LOCK",
                             "cannot lock the snapshot: " + detail);
         }
 #else
@@ -1269,14 +1269,14 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
             out.flush();
             std::string answer;
             if (!std::getline(in, answer)) {
-                throw ToolError(ExitCode::Usage, "REPLACE_ABORTED",
+                throw ToolError(ExitCode::Cancelled, "REPLACE_ABORTED",
                                 "snapshot replacement cancelled");
             }
             if (!answer.empty() && answer.back() == '\r') {
                 answer.pop_back();
             }
             if (answer != "yes") {
-                throw ToolError(ExitCode::Usage, "REPLACE_ABORTED",
+                throw ToolError(ExitCode::Cancelled, "REPLACE_ABORTED",
                                 "snapshot replacement cancelled");
             }
         }
@@ -1338,7 +1338,7 @@ int handle_status_local(const ParsedArgs &parsed, std::istream &in, std::ostream
         std::find(parsed.command_args.begin(), parsed.command_args.end(), "all") !=
         parsed.command_args.end();
     const CommandFlags flags =
-        parse_command_flags(parsed.command_args, {"--watch"}, {});
+        parse_command_flags(parsed.command_args, {"--at", "--labs", "--watch"}, {});
     int watch = 0;
     if (flags.values.count("--watch") != 0) {
         watch = parse_watch_seconds(flags.values.at("--watch"));

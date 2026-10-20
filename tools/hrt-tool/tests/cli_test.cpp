@@ -629,7 +629,7 @@ int main() {
         const RunResult result =
             run({"login", "--config-dir", temp.path().string(), "--vault-password-file",
                  password_file.string()});
-        CHECK_EQ(result.code, 3);
+        CHECK_EQ(result.code, static_cast<int>(ExitCode::Permission));
 
         const RunResult missing_log =
             run({"logs", "show", "--config-dir", temp.path().string(),
@@ -654,7 +654,7 @@ int main() {
             {"init", "--reset", "--config-dir", temp.path().string(),
              "--vault-password-stdin"},
             "no\n" + std::string(kPasswordLine));
-        CHECK_EQ(refused.code, 2);
+        CHECK_EQ(refused.code, static_cast<int>(ExitCode::Cancelled));
         CHECK(std::filesystem::exists(temp.path() / "vault.hrtv"));
 
         const RunResult reset = run(

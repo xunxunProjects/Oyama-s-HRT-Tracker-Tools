@@ -29,6 +29,12 @@ int main() {
     CHECK(!should_print_human_line(false, true, false, true));
     CHECK(!should_print_human_line(false, false, true, true));
     CHECK(!should_print_human_line(false, false, false, false));
+    set_humor_enabled(false);
+    CHECK(!should_print_human_line(false, false, false, humor_enabled()));
+    set_humor_enabled(true);
+    CHECK(should_print_human_line(false, false, false, humor_enabled()));
+    CHECK(mutation_check_hint("add").find("dose list") != std::string::npos);
+    CHECK(mutation_check_hint("lab").find("lab list") != std::string::npos);
     CHECK(failure_human_line(Language::En, FailureKind::FinalFallback)
               .find("cries") != std::string::npos);
     NetworkFailure nf("TUNNEL_INTERRUPTED", "reset", FailureKind::TunnelInterrupted);

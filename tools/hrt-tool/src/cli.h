@@ -12,3 +12,4 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
 ParsedArgs parse_cli_args(int argc, const char *const *argv);
 
 void print_help(std::ostream &out);
+void print_command_help(const std::string &command, std::ostream &out);

@@ -205,14 +205,20 @@ func validateProxy(value string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy URL: %w", err)
 	}
+	if parsed.Scheme == "socks5" {
+		parsed.Scheme = "socks5h"
+	}
 	if parsed.Scheme != "socks5h" {
-		return nil, errors.New("proxy must use socks5h:// so the proxy resolves every name")
+		return nil, errors.New("proxy must use socks5:// or socks5h:// so the proxy resolves every name")
 	}
 	if parsed.User != nil {
 		return nil, errors.New("proxy authentication is not supported")
 	}
-	if parsed.Hostname() == "" || parsed.Port() == "" {
-		return nil, errors.New("proxy URL needs a host and port")
+	if parsed.Hostname() == "" {
+		return nil, errors.New("proxy URL needs a host")
+	}
+	if parsed.Port() == "" {
+		parsed.Host = net.JoinHostPort(parsed.Hostname(), "1080")
 	}
 	return parsed, nil
 }

@@ -33,4 +33,7 @@ FailureKind classify_http(long status);
 FailureKind classify_socks5(unsigned char reply);
 bool should_retry(FailureKind kind, bool is_read, bool debug, int attempts);
 bool should_print_human_line(bool debug, bool trace, bool no_humor, bool humor);
+void set_humor_enabled(bool enabled);
+bool humor_enabled();
 std::string failure_human_line(Language language, FailureKind kind);
+std::string mutation_check_hint(const std::string &command);

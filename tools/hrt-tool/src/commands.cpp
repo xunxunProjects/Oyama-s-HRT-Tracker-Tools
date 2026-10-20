@@ -73,7 +73,11 @@ HttpOptions http_options_for(const ParsedArgs &parsed, const VaultData &data,
                              std::ostream &err) {
     HttpOptions http;
     if (parsed.options.proxy_explicit) {
-        http.proxy = normalize_proxy_url(parsed.options.proxy, &err);
+        /* An explicit empty proxy means "direct"; --probe uses this for a
+           new link that has no proxy of its own. */
+        http.proxy = parsed.options.proxy.empty()
+                         ? std::string{}
+                         : normalize_proxy_url(parsed.options.proxy, &err);
     } else if (!data.proxy.empty()) {
         /* A vault written by an older build may still hold socks5://. */
         http.proxy = normalize_proxy_url(data.proxy, nullptr);
@@ -572,6 +576,10 @@ int command_help(const ParsedArgs &parsed, std::ostream &out) {
         }
         return 0;
     }
+    if (!parsed.command_args.empty()) {
+        print_command_help(parsed.command_args.front(), out);
+        return 0;
+    }
     print_help(out);
     return 0;
 }
@@ -941,9 +949,14 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
         throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
                         "the account has no snapshot yet");
     }
+    ParsedArgs effective = parsed;
+    if (effective.options.mode.empty()) {
+        effective.options.mode = unlocked.session().data.mode;
+    }
     const std::array<uint8_t, 32> key =
-        cloud_key_for(unlocked, parsed, in, out);
-    return handle_look_payload(parsed, payload_from_snapshot(*snapshot, key), out);
+        cloud_key_for(unlocked, effective, in, out);
+    return handle_look_payload(effective,
+                               payload_from_snapshot(*snapshot, key), out);
 }
 
 int command_status_remote(const ParsedArgs &parsed, std::istream &in,
@@ -982,7 +995,7 @@ int command_status_remote(const ParsedArgs &parsed, std::istream &in,
         std::find(effective.command_args.begin(), effective.command_args.end(),
                   "all") != effective.command_args.end();
     const CommandFlags flags =
-        parse_command_flags(effective.command_args, {"--watch"}, {});
+        parse_command_flags(effective.command_args, {"--at", "--labs", "--watch"}, {});
     int watch = 0;
     if (flags.values.count("--watch") != 0) {
         watch = parse_watch_seconds(flags.values.at("--watch"));
@@ -1093,22 +1106,28 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
     if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
+    ParsedArgs effective = parsed;
+    if (effective.options.mode.empty()) {
+        effective.options.mode = unlocked.session().data.mode;
+    }
     const auto progress = [context](const std::string &phase) {
         if (context != nullptr && context->progress) {
             context->progress(phase);
         }
     };
     progress("trust");
-    const std::string server = authenticated_server(parsed, unlocked.session().data);
+    const std::string server =
+        authenticated_server(effective, unlocked.session().data);
     const std::string trusted_pin =
-        ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
+        ensure_trust(unlocked, effective, in, err, server);
+    HttpOptions http =
+        http_options_for(effective, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
         make_api_client(server, http, unlocked.session().data.token);
 
     const std::array<uint8_t, 32> key =
-        cloud_key_for(unlocked, parsed, in, out);
+        cloud_key_for(unlocked, effective, in, out);
     progress("fetching snapshot");
     std::optional<Snapshot> current = client->latest_snapshot();
     const nlohmann::json remote =
@@ -1118,14 +1137,14 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
     std::ostringstream captured;
     std::optional<nlohmann::json> updated;
     progress("applying");
-    if (parsed.command == "add") {
-        updated = apply_add(parsed, remote, captured, err);
-    } else if (parsed.command == "dose") {
-        updated = apply_dose(parsed, remote, captured);
-    } else if (parsed.command == "lab") {
-        updated = apply_lab(parsed, remote, captured);
-    } else if (parsed.command == "weight") {
-        updated = apply_weight(parsed, remote, captured);
+    if (effective.command == "add") {
+        updated = apply_add(effective, remote, captured, err);
+    } else if (effective.command == "dose") {
+        updated = apply_dose(effective, remote, captured);
+    } else if (effective.command == "lab") {
+        updated = apply_lab(effective, remote, captured);
+    } else if (effective.command == "weight") {
+        updated = apply_weight(effective, remote, captured);
     } else {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "this command has no live mode");
@@ -1138,8 +1157,13 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
     /* Print the mutation line only after the write succeeds, so a failed push
        never looks like a saved change. */
     progress("uploading");
-    const PushResult pushed =
-        push_sync_payload(*client, key, *updated, err, current);
+    PushResult pushed;
+    try {
+        pushed = push_sync_payload(*client, key, *updated, err, current);
+    } catch (const NetworkFailure &) {
+        err << mutation_check_hint(effective.command) << "\n";
+        throw;
+    }
     out << captured.str();
     if (pushed.up_to_date) {
         out << "already up to date (" << pushed.id << ")\n";
@@ -1211,13 +1235,13 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
             std::error_code exists_error;
             const bool exists = std::filesystem::exists(out_path, exists_error);
             if (exists_error) {
-                throw ToolError(ExitCode::Vault, "SNAPSHOT_STAT",
+                throw ToolError(ExitCode::Permission, "SNAPSHOT_STAT",
                                 "cannot stat " + out_path + ": " +
                                     exists_error.message());
             }
             if (exists && !parsed.options.force) {
                 throw ToolError(
-                    ExitCode::Usage, "SNAPSHOT_EXISTS",
+                    ExitCode::Permission, "SNAPSHOT_EXISTS",
                     "refusing to overwrite " + out_path +
                         "; pass --force or choose another path");
             }
@@ -1273,14 +1297,14 @@ int command_init(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         err.flush();
         std::string answer;
         if (!std::getline(in, answer)) {
-            throw ToolError(ExitCode::Usage, "RESET_ABORTED",
+            throw ToolError(ExitCode::Cancelled, "RESET_ABORTED",
                             "vault replacement cancelled");
         }
         if (!answer.empty() && answer.back() == '\r') {
             answer.pop_back();
         }
         if (answer != "yes") {
-            throw ToolError(ExitCode::Usage, "RESET_ABORTED",
+            throw ToolError(ExitCode::Cancelled, "RESET_ABORTED",
                             "vault replacement cancelled");
         }
     }
@@ -1365,7 +1389,7 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             key != "transport" && key != "compute" && key != "language" &&
             key != "welcome" && key != "humor" && key != "mode" &&
             key != "active-link") {
-            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
+            throw ToolError(ExitCode::Config, "CONFIG_KEY", "unknown config key: " + key);
         }
         return 0;
     }
@@ -1376,10 +1400,10 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         const std::string value =
             parsed.command_args.size() > 2 ? parsed.command_args[2] : "";
         if (key.empty()) {
-            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "missing config key");
+            throw ToolError(ExitCode::Config, "CONFIG_KEY", "missing config key");
         }
         if (sub == "set" && value.empty()) {
-            throw ToolError(ExitCode::Usage, "CONFIG_VALUE", "missing value");
+            throw ToolError(ExitCode::Config, "CONFIG_VALUE", "missing value");
         }
         if (key == "language") {
             if (sub == "unset") {
@@ -1468,7 +1492,7 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             unlocked.session().data.server = next;
             out << "server set: " << next << "\n";
         } else if (key == "transport") {
-            throw ToolError(ExitCode::Usage, "TRANSPORT_SELECTION",
+            throw ToolError(ExitCode::NotImplemented, "TRANSPORT_SELECTION",
                             "the transport follows the server URL: use "
                             "config set server hrt://HOST[:PORT] for hrt/1, "
                             "or an https:// URL for TLS");
@@ -1476,7 +1500,7 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
                             "server compute is reserved; computation is local");
         } else {
-            throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
+            throw ToolError(ExitCode::Config, "CONFIG_KEY", "unknown config key: " + key);
         }
         unlocked.session().data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
@@ -1556,6 +1580,12 @@ int command_add_link(const ParsedArgs &parsed, std::istream &in, std::ostream &o
     }
 
     UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (parsed.options.force &&
+        name == unlocked.session().data.active_link) {
+        /* Do not let save_active_view write the old session back over the
+           replacement record. */
+        select_link(unlocked.session().data, "");
+    }
     if (parsed.options.probe) {
         ParsedArgs probe = parsed;
         probe.options.server = url;
@@ -1689,7 +1719,7 @@ std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                             "cannot stat the vault password file");
         }
         if ((info.st_mode & 0077) != 0) {
-            throw ToolError(ExitCode::Vault, "VAULT_PASSWORD_PERMISSIONS",
+            throw ToolError(ExitCode::Permission, "VAULT_PASSWORD_PERMISSIONS",
                             "vault password file must be mode 0600");
         }
 #endif
@@ -1735,7 +1765,7 @@ std::string read_account_password(const GlobalOptions &options, std::istream &in
                             "cannot stat the account password file");
         }
         if ((info.st_mode & 0077) != 0) {
-            throw ToolError(ExitCode::Vault, "ACCOUNT_PASSWORD_PERMISSIONS",
+            throw ToolError(ExitCode::Permission, "ACCOUNT_PASSWORD_PERMISSIONS",
                             "account password file must be mode 0600");
         }
 #endif
