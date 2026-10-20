@@ -42,7 +42,9 @@ add_library(hrtcpp STATIC
     src/cli.cpp
     src/command_flags.cpp
     src/commands.cpp
+    src/completion.cpp
     src/console.cpp
+    src/doctor.cpp
     src/encrypted_file.cpp
     src/entropy.cpp
     src/exit_codes.cpp
@@ -62,6 +64,7 @@ add_library(hrtcpp STATIC
     src/paths.cpp
     src/pk.cpp
     src/prompt.cpp
+    src/proxy_commands.cpp
     src/session.cpp
     src/snapshot.cpp
     src/status.cpp
@@ -144,6 +147,22 @@ if(BUILD_TESTING)
     add_executable(add_interactive_test tests/add_interactive_test.cpp)
     target_link_libraries(add_interactive_test PRIVATE hrtcpp)
     add_test(NAME add_interactive COMMAND add_interactive_test)
+
+    add_executable(doctor_test tests/doctor_test.cpp)
+    target_link_libraries(doctor_test PRIVATE hrtcpp)
+    add_test(NAME doctor COMMAND doctor_test)
+
+    add_executable(completion_test tests/completion_test.cpp)
+    target_link_libraries(completion_test PRIVATE hrtcpp)
+    add_test(NAME completion COMMAND completion_test)
+
+    add_executable(proxy_commands_test tests/proxy_commands_test.cpp)
+    target_link_libraries(proxy_commands_test PRIVATE hrtcpp)
+    add_test(NAME proxy_commands COMMAND proxy_commands_test)
+
+    add_executable(version_json_test tests/version_json_test.cpp)
+    target_link_libraries(version_json_test PRIVATE hrtcpp)
+    add_test(NAME version_json COMMAND version_json_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

@@ -3,7 +3,9 @@
 #include "add_interactive.h"
 #include "api.h"
 #include "backup_envelope.h"
+#include "cli.h"
 #include "command_flags.h"
+#include "completion.h"
 #include "console.h"
 #include "encrypted_file.h"
 #include "link.h"
@@ -550,9 +552,35 @@ nlohmann::json read_sync_input(const std::string &path, const std::string &maste
 }
 
 int command_version(const ParsedArgs &parsed, std::ostream &out) {
-    (void)parsed;
+    if (parsed.options.json) {
+        out << format_version_json() << "\n";
+        return 0;
+    }
     out << format_version_line();
     return 0;
+}
+
+int command_help(const ParsedArgs &parsed, std::ostream &out) {
+    if (!parsed.command_args.empty() &&
+        parsed.command_args.front() == "exit-codes") {
+        out << "Exit codes:\n";
+        for (int value = 0; value <= 14; ++value) {
+            const ExitCode code = static_cast<ExitCode>(value);
+            out << "  " << value << "  " << exit_code_name(code) << "  "
+                << exit_code_description(code) << "\n";
+        }
+        return 0;
+    }
+    print_help(out);
+    return 0;
+}
+
+int command_completion(const ParsedArgs &parsed, std::ostream &out) {
+    if (parsed.command_args.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "completion needs bash, zsh, or fish");
+    }
+    return render_completion(parsed.command_args.front(), out);
 }
 
 std::string pairing_device_label(const ParsedArgs &parsed) {
@@ -1642,7 +1670,7 @@ const std::set<std::string> &known_commands() {
         "version", "init",    "login",    "logout",    "whoami", "look",
         "add",     "dose",    "lab",      "weight",    "export", "import",
         "snapshot", "config", "logs",     "add-link",  "commit-server", "link",
-        "console",  "status",
+        "console",  "status", "proxy",    "doctor",    "completion",    "help",
     };
     return kCommands;
 }
@@ -1756,6 +1784,18 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
 
     if (parsed.command == "version") {
         return command_version(parsed, out);
+    }
+    if (parsed.command == "help") {
+        return command_help(parsed, out);
+    }
+    if (parsed.command == "completion") {
+        return command_completion(parsed, out);
+    }
+    if (parsed.command == "proxy") {
+        return command_proxy(parsed, in, out, err, context);
+    }
+    if (parsed.command == "doctor") {
+        return command_doctor(parsed, in, out, err, context);
     }
     if (parsed.command == "console") {
         return run_console(parsed.options, in, out, err);

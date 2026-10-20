@@ -130,13 +130,15 @@ UnlockedVault UnlockedVault::unlock_impl(const GlobalOptions &options, std::istr
     }
 
     UnlockedVault result;
-    if (acquire_lock) {
-        result.lock_ = std::make_unique<VaultLock>(paths.vault_file);
-    }
     if (context != nullptr && context->loaded) {
+        /* The caller already holds an unlocked session (and may hold the
+           vault lock); re-locking from a second fd would deadlock. */
         result.session_ = &context->session;
         result.master_ = &context->master;
         return result;
+    }
+    if (acquire_lock) {
+        result.lock_ = std::make_unique<VaultLock>(paths.vault_file);
     }
 
     std::string master = read_vault_password(options, in, out, false);

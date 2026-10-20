@@ -51,6 +51,11 @@ struct SessionContext;
 int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
              std::ostream &err, SessionContext *context = nullptr);
 
+int command_proxy(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                  std::ostream &err, SessionContext *context);
+int command_doctor(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                   std::ostream &err, SessionContext *context);
+
 std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                                 std::ostream &out, bool confirm);
 
