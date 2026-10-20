@@ -702,8 +702,10 @@ struct LocalContext {
 LocalContext open_context(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                           bool for_write) {
     if (parsed.options.snapshot.empty()) {
-        throw ToolError(ExitCode::Usage, "SNAPSHOT_REQUIRED",
-                        "pass --snapshot FILE; the live API lands in M4");
+        throw ToolError(
+            ExitCode::Usage, "SNAPSHOT_REQUIRED",
+            "pass --snapshot FILE; live mode is available for look/add/dose/lab/weight "
+            "after login");
     }
     LocalContext context;
     context.path = parsed.options.snapshot;
@@ -825,13 +827,26 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
         payload.contains("pkParams") ? payload.at("pkParams") : json();
     const hrtcore_pk_params params = sanitize_pk_params(params_json);
 
+    /* normalize_sync_payload already turns an implausible year into null; the
+       range check keeps this safe if a caller hands us a raw payload. */
+    int birth_year = 0;
+    if (payload.contains("birthYear") && payload.at("birthYear").is_number_integer()) {
+        const int64_t year = payload.at("birthYear").get<int64_t>();
+        const int current_year =
+            static_cast<int>(1970.0 + current / (365.2425 * 24.0));
+        if (year >= 1900 && year <= current_year) {
+            birth_year = static_cast<int>(year);
+        }
+    }
+
     std::vector<PkEvent> events;
     if (block.contains("events") && block.at("events").is_array()) {
         for (const json &event : block.at("events")) {
             events.push_back(pk_event_from_json(event));
         }
     }
-    std::optional<PkResult> simulation = run_pk(events, weight, params, current);
+    std::optional<PkResult> simulation =
+        run_pk(events, weight, params, current, birth_year);
 
     json view;
     view["now"] = format_time(current, parsed.options.utc);
@@ -927,9 +942,8 @@ int handle_look(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
     return render_look(parsed, context.payload, out);
 }
 
-int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+json apply_add_local(const ParsedArgs &parsed, json context_payload, std::ostream &out,
                std::ostream &err) {
-    LocalContext context = open_context(parsed, in, out, true);
     const CommandFlags flags = parse_command_flags(
         parsed.command_args, {"--drug", "--time", "--measurement", "--dose", "--route"}, {});
     const std::string drug = require_value(flags, "--drug");
@@ -952,7 +966,7 @@ int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         err << "assuming route: " << route_display(route) << "\n";
     }
 
-    json payload = normalize_sync_payload(context.payload);
+    json payload = normalize_sync_payload(context_payload);
     const ModeKey mode = resolve_mode(parsed, payload, true);
     json &block = mode_block(payload, mode);
     if (!block.contains("events") || !block.at("events").is_array()) {
@@ -994,13 +1008,20 @@ int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     }
     block["events"].push_back(event);
     payload["meta"]["version"] = 2;
-    context.payload = payload;
-    save_context(context);
     out << "added " << event.at("id").get<std::string>() << "\n";
+    return payload;
+}
+
+int handle_add(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+               std::ostream &err) {
+    LocalContext context = open_context(parsed, in, out, true);
+    context.payload = apply_add_local(parsed, context.payload, out, err);
+    save_context(context);
     return 0;
 }
 
-int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+std::optional<json> apply_dose_local(const ParsedArgs &parsed, json context_payload,
+                               std::ostream &out) {
     const CommandFlags flags = parse_command_flags(
         parsed.command_args,
         {"--id", "--drug", "--route", "--time", "--measurement", "--dose"}, {});
@@ -1008,8 +1029,7 @@ int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         throw ToolError(ExitCode::Usage, "USAGE", "dose needs list, edit, or delete");
     }
     const std::string sub = flags.positionals.front();
-    LocalContext context = open_context(parsed, in, out, sub != "list");
-    json payload = normalize_sync_payload(context.payload);
+    json payload = normalize_sync_payload(context_payload);
     const ModeKey mode = resolve_mode(parsed, payload, sub != "list");
     json &block = mode_block(payload, mode);
     if (!block.contains("events") || !block.at("events").is_array()) {
@@ -1023,7 +1043,7 @@ int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         });
         if (parsed.options.json) {
             out << events.dump(2) << "\n";
-            return 0;
+            return std::nullopt;
         }
         for (const json &event : events) {
             const int ester = ester_from_string(string_or(event, "ester", ""));
@@ -1032,15 +1052,13 @@ int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
                 << drug_display(ester) << "  " << string_or(event, "route", "") << "  "
                 << number_or(event, "doseMG", 0.0) << " mg\n";
         }
-        return 0;
+        return std::nullopt;
     }
     if (sub == "delete") {
         const std::string id = require_value(flags, "--id");
         write_tombstone(payload, mode, RecordKind::Events, id, now_milliseconds());
-        context.payload = payload;
-        save_context(context);
         out << "deleted " << id << "\n";
-        return 0;
+        return payload;
     }
     if (sub == "edit") {
         const std::string id = require_value(flags, "--id");
@@ -1067,23 +1085,38 @@ int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         }
         (*record)["updatedAt"] = now_milliseconds();
         clear_tombstone(payload, mode, RecordKind::Events, id);
-        context.payload = payload;
-        save_context(context);
         out << "updated " << id << "\n";
-        return 0;
+        return payload;
     }
     throw ToolError(ExitCode::Usage, "USAGE", "dose needs list, edit, or delete");
 }
 
-int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+int handle_dose(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+    const CommandFlags flags = parse_command_flags(
+        parsed.command_args,
+        {"--id", "--drug", "--route", "--time", "--measurement", "--dose"}, {});
+    if (flags.positionals.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE", "dose needs list, edit, or delete");
+    }
+    const bool mutating = flags.positionals.front() != "list";
+    LocalContext context = open_context(parsed, in, out, mutating);
+    std::optional<json> updated = apply_dose_local(parsed, context.payload, out);
+    if (updated.has_value()) {
+        context.payload = std::move(*updated);
+        save_context(context);
+    }
+    return 0;
+}
+
+std::optional<json> apply_lab_local(const ParsedArgs &parsed, json context_payload,
+                              std::ostream &out) {
     const CommandFlags flags = parse_command_flags(
         parsed.command_args, {"--id", "--time", "--value", "--unit", "--assay"}, {});
     if (flags.positionals.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE", "lab needs list, add, edit, or delete");
     }
     const std::string sub = flags.positionals.front();
-    LocalContext context = open_context(parsed, in, out, sub != "list");
-    json payload = normalize_sync_payload(context.payload);
+    json payload = normalize_sync_payload(context_payload);
     const ModeKey mode = resolve_mode(parsed, payload, sub != "list");
     json &block = mode_block(payload, mode);
     if (!block.contains("labResults") || !block.at("labResults").is_array()) {
@@ -1097,7 +1130,7 @@ int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         });
         if (parsed.options.json) {
             out << labs.dump(2) << "\n";
-            return 0;
+            return std::nullopt;
         }
         for (const json &lab : labs) {
             out << string_or(lab, "id", "") << "  "
@@ -1106,7 +1139,7 @@ int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
                 << string_or(lab, "unit", "") << "  "
                 << string_or(lab, "assay", "") << "\n";
         }
-        return 0;
+        return std::nullopt;
     }
     if (sub == "add") {
         json lab{
@@ -1121,18 +1154,14 @@ int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         }
         block["labResults"].push_back(lab);
         payload["meta"]["version"] = 2;
-        context.payload = payload;
-        save_context(context);
         out << "added " << lab.at("id").get<std::string>() << "\n";
-        return 0;
+        return payload;
     }
     if (sub == "delete") {
         const std::string id = require_value(flags, "--id");
         write_tombstone(payload, mode, RecordKind::LabResults, id, now_milliseconds());
-        context.payload = payload;
-        save_context(context);
         out << "deleted " << id << "\n";
-        return 0;
+        return payload;
     }
     if (sub == "edit") {
         const std::string id = require_value(flags, "--id");
@@ -1155,30 +1184,44 @@ int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
         }
         (*record)["updatedAt"] = now_milliseconds();
         clear_tombstone(payload, mode, RecordKind::LabResults, id);
-        context.payload = payload;
-        save_context(context);
         out << "updated " << id << "\n";
-        return 0;
+        return payload;
     }
     throw ToolError(ExitCode::Usage, "USAGE", "lab needs list, add, edit, or delete");
 }
 
-int handle_weight(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+int handle_lab(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+    const CommandFlags flags = parse_command_flags(
+        parsed.command_args, {"--id", "--time", "--value", "--unit", "--assay"}, {});
+    if (flags.positionals.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE", "lab needs list, add, edit, or delete");
+    }
+    const bool mutating = flags.positionals.front() != "list";
+    LocalContext context = open_context(parsed, in, out, mutating);
+    std::optional<json> updated = apply_lab_local(parsed, context.payload, out);
+    if (updated.has_value()) {
+        context.payload = std::move(*updated);
+        save_context(context);
+    }
+    return 0;
+}
+
+std::optional<json> apply_weight_local(const ParsedArgs &parsed, json context_payload,
+                                 std::ostream &out) {
     const CommandFlags flags =
         parse_command_flags(parsed.command_args, {"--kg"}, {});
     if (flags.positionals.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE", "weight needs get or set");
     }
     const std::string sub = flags.positionals.front();
-    LocalContext context = open_context(parsed, in, out, sub == "set");
-    json payload = normalize_sync_payload(context.payload);
+    json payload = normalize_sync_payload(context_payload);
     if (sub == "get") {
         if (payload.contains("weight") && payload.at("weight").is_number()) {
             out << "weight: " << payload.at("weight").get<double>() << " kg\n";
         } else {
             out << "weight: unstated\n";
         }
-        return 0;
+        return std::nullopt;
     }
     if (sub == "set") {
         const double kg = std::atof(require_value(flags, "--kg").c_str());
@@ -1189,12 +1232,26 @@ int handle_weight(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
         payload["weight"] = kg;
         payload["weightUpdatedAt"] = now_milliseconds();
         payload["meta"]["version"] = 2;
-        context.payload = payload;
-        save_context(context);
         out << "weight set: " << kg << " kg\n";
-        return 0;
+        return payload;
     }
     throw ToolError(ExitCode::Usage, "USAGE", "weight needs get or set");
+}
+
+int handle_weight(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+    const CommandFlags flags =
+        parse_command_flags(parsed.command_args, {"--kg"}, {});
+    if (flags.positionals.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE", "weight needs get or set");
+    }
+    const bool mutating = flags.positionals.front() == "set";
+    LocalContext context = open_context(parsed, in, out, mutating);
+    std::optional<json> updated = apply_weight_local(parsed, context.payload, out);
+    if (updated.has_value()) {
+        context.payload = std::move(*updated);
+        save_context(context);
+    }
+    return 0;
 }
 
 int handle_export(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
@@ -1335,6 +1392,29 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
 }
 
 } // namespace
+
+nlohmann::json apply_add(const ParsedArgs &parsed, nlohmann::json payload,
+                         std::ostream &out, std::ostream &err) {
+    return apply_add_local(parsed, std::move(payload), out, err);
+}
+
+std::optional<nlohmann::json> apply_dose(const ParsedArgs &parsed,
+                                         nlohmann::json payload,
+                                         std::ostream &out) {
+    return apply_dose_local(parsed, std::move(payload), out);
+}
+
+std::optional<nlohmann::json> apply_lab(const ParsedArgs &parsed,
+                                        nlohmann::json payload,
+                                        std::ostream &out) {
+    return apply_lab_local(parsed, std::move(payload), out);
+}
+
+std::optional<nlohmann::json> apply_weight(const ParsedArgs &parsed,
+                                           nlohmann::json payload,
+                                           std::ostream &out) {
+    return apply_weight_local(parsed, std::move(payload), out);
+}
 
 int handle_look_payload(const ParsedArgs &parsed, const nlohmann::json &payload,
                         std::ostream &out) {

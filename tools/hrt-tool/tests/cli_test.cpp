@@ -255,6 +255,11 @@ public:
     void drop_login(bool drop) { drop_login_ = drop; }
 
     int authenticated_requests() const { return authenticated_requests_; }
+    int snapshot_puts() const { return snapshot_puts_; }
+    std::string last_snapshot_body() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return last_snapshot_body_;
+    }
 
 private:
     void serve() {
@@ -364,6 +369,9 @@ private:
             first_space == std::string::npos
                 ? std::string::npos
                 : request.find(' ', first_space + 1);
+        const std::string method =
+            first_space == std::string::npos ? std::string{}
+                                             : request.substr(0, first_space);
         const std::string path =
             first_space == std::string::npos || second_space == std::string::npos
                 ? std::string{}
@@ -392,6 +400,20 @@ private:
                    R"("serverTime":"2026-10-20T02:00:00.000Z","apiVersion":1})";
         } else if (path == "/api/tool/v1/logout") {
             body = R"({"ok":true})";
+        } else if (path == "/api/tool/v1/snapshot") {
+            if (method == "PUT") {
+                ++snapshot_puts_;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    last_snapshot_body_ =
+                        headers_done ? request.substr(header_end) : std::string{};
+                }
+                body = R"({"id":"00000000-0000-4000-8000-000000000002",)"
+                       R"("createdAt":1792495000})";
+            } else {
+                status = "404 Not Found";
+                body = R"({"code":"NO_SNAPSHOT","message":"none"})";
+            }
         } else {
             status = "404 Not Found";
             body = R"({"code":"NOT_FOUND","message":"no"})";
@@ -423,8 +445,10 @@ private:
     std::atomic<bool> fail_login_{false};
     std::atomic<bool> drop_login_{false};
     std::atomic<int> authenticated_requests_{0};
+    std::atomic<int> snapshot_puts_{0};
+    std::string last_snapshot_body_;
     std::atomic<bool> stopping_{false};
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::thread thread_;
 };
 #endif
@@ -569,8 +593,18 @@ int main() {
         CHECK_EQ(remote_look.code, 3);
         CHECK(contains(remote_look.err, "log in first"));
 
-        for (const char *command : {"add", "dose", "lab", "weight", "export",
-                                    "import"}) {
+        /* With a vault but no session, the live mutation commands ask for a
+           login; export/import remain offline-only and ask for --snapshot. */
+        for (const char *command : {"add", "dose", "lab", "weight"}) {
+            std::vector<std::string> args{command};
+            args.push_back("--config-dir");
+            args.push_back(temp.path().string());
+            args.push_back("--vault-password-stdin");
+            const RunResult result = run(args, kPasswordLine);
+            CHECK_EQ(result.code, 3);
+            CHECK(contains(result.err, "log in first"));
+        }
+        for (const char *command : {"export", "import"}) {
             std::vector<std::string> args{command};
             args.push_back("--config-dir");
             args.push_back(temp.path().string());
@@ -579,10 +613,7 @@ int main() {
             CHECK_EQ(result.code, 2);
             CHECK(contains(result.err, "--snapshot") ||
                   contains(result.err, "missing --out") ||
-                  contains(result.err, "missing --in") ||
-                  contains(result.err, "dose needs") ||
-                  contains(result.err, "lab needs") ||
-                  contains(result.err, "weight needs"));
+                  contains(result.err, "missing --in"));
         }
 
         const std::filesystem::path password_file = temp.path() / "password.txt";
@@ -907,6 +938,50 @@ int main() {
             CHECK_EQ(success.code, 0);
             const VaultSession session = Vault::unlock(vault, master);
             CHECK_EQ(session.data.last_login_failed_at, static_cast<int64_t>(0));
+        }
+    }
+
+    {
+        /* Live mutation: login, then `add` with no --snapshot pulls the
+           (missing) revision, applies the dose, encrypts the payload and
+           PUTs it. The mock rejects GET with NO_SNAPSHOT and records the
+           write so the test can see the cloud bundle leave the CLI. */
+        LoopbackServer server;
+        CHECK(server.ok());
+        if (server.ok()) {
+            TempDir temp;
+            const std::filesystem::path account = temp.path() / "account.txt";
+            {
+                std::ofstream out(account);
+                out << "account-password\n";
+            }
+            ::chmod(account.c_str(), 0600);
+            const RunResult init = run(
+                {"init", "--config-dir", temp.path().string(),
+                 "--vault-password-stdin"},
+                kPasswordLine);
+            CHECK_EQ(init.code, 0);
+
+            const RunResult login = run(
+                {"login", "--trust-server", "--server", server.url(),
+                 "--username", "Alice", "--account-password-file",
+                 account.string(), "--vault-password-stdin", "--config-dir",
+                 temp.path().string()},
+                kPasswordLine);
+            CHECK_EQ(login.code, 0);
+
+            const RunResult add = run(
+                {"add", "--drug", "Estradiol valerate", "--time", "now",
+                 "--measurement", "2mg", "--route", "injection", "--mode",
+                 "transfem", "--account-password-file", account.string(),
+                 "--vault-password-stdin", "--config-dir",
+                 temp.path().string()},
+                kPasswordLine);
+            CHECK_EQ(add.code, 0);
+            CHECK(contains(add.out, "added "));
+            CHECK(contains(add.out, "pushed "));
+            CHECK_EQ(server.snapshot_puts(), 1);
+            CHECK(contains(server.last_snapshot_body(), "\"cloud\":1"));
         }
     }
 #endif

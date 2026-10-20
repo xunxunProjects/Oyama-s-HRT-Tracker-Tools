@@ -163,6 +163,63 @@ int main() {
     }
 
     {
+        /* The snapshot's birthYear must reach the PK engine: an older member
+           clears the same oral dose more slowly and shows a higher level. */
+        const double now_h =
+            static_cast<double>(std::time(nullptr)) / 3600.0;
+        const int current_year =
+            static_cast<int>(1970.0 + now_h / (365.2425 * 24.0));
+        const auto write_plain = [&](const char *name, json birth) {
+            const json empty_deletions = {{"events", json::object()},
+                                          {"labResults", json::object()},
+                                          {"doseTemplates", json::object()}};
+            const json event = {{"id", "dose-age"},
+                                {"route", "oral"},
+                                {"ester", "E2"},
+                                {"doseMG", 2},
+                                {"timeH", now_h - 1.0},
+                                {"extras", json::object()}};
+            const json block = {{"events", json::array({event})},
+                                {"labResults", json::array()},
+                                {"doseTemplates", json::array()},
+                                {"deletions", empty_deletions}};
+            json payload = {{"meta", {{"version", 2}}},
+                            {"mode", "transfem"},
+                            {"weight", 70},
+                            {"modes", {{"transfem", block},
+                                       {"transmasc", block}}}};
+            if (!birth.is_null()) {
+                payload["birthYear"] = birth;
+                payload["birthYearUpdatedAt"] = 1;
+            }
+            const std::filesystem::path path = temp.path() / name;
+            write_text(path, payload.dump(2));
+            return path;
+        };
+        const auto level = [&](const std::filesystem::path &path) {
+            const RunResult result =
+                run({"look", "--json", "--snapshot", path.string()});
+            CHECK_EQ(result.code, 0);
+            const json view = json::parse(result.out);
+            return view.at("compounds").at(0).at("now").get<std::string>();
+        };
+
+        const std::string none = level(write_plain("plain-none.json", json()));
+        const std::string young =
+            level(write_plain("plain-young.json", current_year - 25));
+        const std::string old =
+            level(write_plain("plain-old.json", current_year - 70));
+        CHECK(!none.empty());
+        CHECK(young != old);
+        /* Concentrations are printed as text; compare the parsed leading
+           number rather than the unit suffix. */
+        const auto leading = [](const std::string &text) {
+            return std::strtod(text.c_str(), nullptr);
+        };
+        CHECK(leading(young) < leading(old));
+    }
+
+    {
         std::vector<std::string> args{
             "add", "--drug", "Estradiol valerate", "--time", "now",
             "--measurement", "2mg"};

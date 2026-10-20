@@ -173,6 +173,15 @@ Cloudflare-hosted deployments do not support `hrt://`, so they necessarily
 use the warned HTTPS password login. Self-hosted deployments can enable the
 raw transport and get web-approval pairing.
 
+**Who maintains the raw endpoint.** An `hrt://` listener is self-hosted: it
+is operated and maintained by the person or community running that domain,
+not by this project. That includes TLS and SPKI rotation, patching the
+adapter, monitoring availability, and keeping Tor/I2P reachability working.
+The project ships the protocol and reference adapter but no public instance
+and no availability guarantee. If the endpoint you use is down or stale, the
+operators are the ones who can fix it; the HTTPS fallback (with its warning)
+remains available on deployments that offer it.
+
 ## If something looks wrong
 
 1. Open **Account → Security** on the web.

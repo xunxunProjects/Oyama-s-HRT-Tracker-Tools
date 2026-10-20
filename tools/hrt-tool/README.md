@@ -11,10 +11,10 @@ trust prompts with pin enforcement, Tor/I2P address policy and proxy
 guidance, the live `/api/tool/v1/*` client, the C PK engine (31 reference
 scenarios), cloud-snapshot decryption, sync-payload merge/tombstones,
 encrypted `HRTE` exports, the complete-backup envelope, the Rust printer,
-the local `look`/`add`/`dose`/`lab`/`weight`/`export`/`import` commands,
-`login`/`logout`/`whoami`/`snapshot pull|push|list`, and
-`config get|set|unset`. Still to come: the optional transport envelope,
-calibration, and the GPG F2F mode.
+the local and live `look`/`add`/`dose`/`lab`/`weight` commands, local
+`export`/`import`, `login`/`logout`/`whoami`/`snapshot pull|push|list`, and
+`config get|set|unset`, including the website's age clearance adjustment.
+Still to come: the optional transport envelope and calibration.
 
 ## Build
 
@@ -123,9 +123,9 @@ scalars with their own `*UpdatedAt` timestamps. `birthYear` is validated as an
 integer in `1900..current year`; a present but implausible value is read as
 "none" (`null`), matching the website. Doses are compared by their cleaned
 value, so a float tail and its tidied copy are not reported as a conflict.
-The tool preserves and merges `birthYear`, but `look` does not apply the
-website's age-based clearance adjustment yet; it remains in the encrypted
-payload and is never printed.
+`look` applies the website's age-based clearance adjustment to each dose at
+the time it was taken when the payload carries a usable `birthYear`, using
+the same 19–75 clamp and E2/T slopes. The year itself is never printed.
 
 Mutating local commands take an advisory lock on `<snapshot>.lock` and hold it
 across read-modify-write, so concurrent `add`/`import` processes cannot lose
@@ -148,12 +148,23 @@ hrt-tool snapshot pull --out snapshot.json
 hrt-tool look
 hrt-tool look --all --json
 
-# Or work from the downloaded file; every command writes only encrypted data.
+# Mutations are live too: pull the newest revision, apply the change, then
+# merge and conditional-put with a retry on 409.
+hrt-tool add --drug "Estradiol valerate" --time now --measurement 2mg \
+  --route injection --mode transfem
+hrt-tool dose list
+hrt-tool dose edit --id <id> --measurement 3mg
+hrt-tool dose delete --id <id>
+hrt-tool lab add --time now --value 180 --unit pg/ml --assay lcms
+hrt-tool weight set --kg 72
+
+# Or work offline from the downloaded file; every command writes only
+# encrypted data. Live mode is skipped whenever --snapshot is present.
 hrt-tool look --snapshot snapshot.json --user-id <id> --account-password-file account.txt
 hrt-tool add --snapshot snapshot.json --user-id <id> --account-password-file account.txt \
   --drug "Estradiol valerate" --time now --measurement 2mg
 
-# Merge with the server's newest revision, conditional-put, and retry on 409.
+# Push a file merge explicitly, or list revisions.
 hrt-tool snapshot push --in snapshot.json
 hrt-tool snapshot list
 hrt-tool logout
@@ -215,6 +226,13 @@ Deploy, AWS Lambda@Edge, and Fastly Compute@Edge. Those deployments keep the
 HTTPS API, which the client warns about. Cloudflare-hosted deployments keep
 the existing HTTPS API.
 
+Running an `hrt://` endpoint is an **operator/community responsibility**. The
+project ships the protocol, this client, and the reference adapter, but no
+public endpoint and no availability guarantee: whoever deploys one maintains
+it — TLS and SPKI rotation, patches, monitoring, and Tor/I2P reachability.
+Do not assume an official or community instance exists; ask the operator of
+the endpoint you use how it is maintained.
+
 Supported hosts for `hrt://` and the HTTPS policy:
 
 - ordinary DNS names and loopback addresses;
@@ -262,8 +280,9 @@ proxy is configured but the hidden service cannot be resolved, the error names
 the proxy and suggests re-running `config set proxy` with the conventional
 address (`9050` for Tor, `4447` for I2P).
 
-The `look` numbers are the uncalibrated baseline: the website's EKF/OU/MIPD
-calibration is not ported yet, and `look` prints a warning saying so.
+The `look` numbers include the age adjustment but are otherwise the
+uncalibrated baseline: the website's EKF/OU/MIPD calibration is not ported
+yet, and `look` prints a warning saying so.
 
 `--time` accepts `now`, `+2h`/`-30m`, `2026y10m19d`, and ISO 8601 with an
 optional `Z` or `+HH:MM`/`-HH:MM` offset; an explicit offset names the instant
@@ -429,13 +448,13 @@ pairing order and the open-list removal semantics are pinned to `logic.ts`.
   `look`/`add`/`dose`/`lab`/`weight`/`export`/`import`.
 - **M3 (implemented):** `/api/tool/v1/*` in the website worker (PRs #133/#134)
   and the live client: `login`, `logout`, `whoami`, `snapshot pull|push|list`.
-- **M4 (trust/proxy implemented):** first-contact SPKI trust prompts, pin
-  enforcement, `config get|set|unset`, Tor/I2P v3 address policy, proxy
-  configuration and failure guidance, and integration tests against a
-  loopback API (the full live client was exercised against local
-  `wrangler dev` in M3). The optional encrypted request envelope remains.
-- Later: calibration (EKF/OU/MIPD), optional server compute, and the GPG F2F
-  advanced mode.
+- **M4 (implemented):** first-contact SPKI trust prompts, pin enforcement,
+  `config get|set|unset`, Tor/I2P v3 address policy, proxy configuration and
+  failure guidance, live `look`/`add`/`dose`/`lab`/`weight`, and integration
+  tests against a loopback API (the live client was exercised against local
+  `wrangler dev`). The optional encrypted request envelope remains.
+- Later: calibration (EKF/OU/MIPD) and optional server compute. GPG/F2F now
+  lives in the separate `hrt-f2f` tool.
 
 ## Licence
 

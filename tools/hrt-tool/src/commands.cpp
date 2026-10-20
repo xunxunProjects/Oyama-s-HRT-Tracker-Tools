@@ -29,6 +29,7 @@
 #include <openssl/crypto.h>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -1002,6 +1003,123 @@ nlohmann::json merge_for_push(const nlohmann::json &remote,
     return merge.payload;
 }
 
+struct PushResult {
+    std::string id;
+    int64_t created_at = 0;
+    bool up_to_date = false;
+};
+
+/* Merge `local` with the newest server revision and write it, retrying the
+ * optimistic loop on 409. `current` is the revision the caller already read,
+ * if any; a stale or missing one is handled by the conflict path. */
+PushResult push_sync_payload(ApiClient &client, const std::array<uint8_t, 32> &key,
+                             const nlohmann::json &local, std::ostream &err,
+                             std::optional<Snapshot> current) {
+    nlohmann::json merged = local;
+    std::string base;
+    if (current.has_value()) {
+        const nlohmann::json remote_payload =
+            payload_from_snapshot(*current, key);
+        if (fingerprint_state(normalize_sync_state(remote_payload)) ==
+            fingerprint_state(normalize_sync_state(local))) {
+            return {current->id, current->created_at, true};
+        }
+        merged = merge_for_push(remote_payload, local, err);
+        if (fingerprint_state(normalize_sync_state(merged)) ==
+            fingerprint_state(normalize_sync_state(remote_payload))) {
+            return {current->id, current->created_at, true};
+        }
+        base = current->id;
+    }
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        try {
+            const Snapshot pushed =
+                client.put_snapshot(encrypt_cloud_bundle(merged, key), base);
+            return {pushed.id, pushed.created_at, false};
+        } catch (const SnapshotConflictError &conflict) {
+            if (attempt == 2) {
+                throw ToolError(ExitCode::Data, "CONFLICT",
+                                "snapshot kept changing; try again");
+            }
+            std::optional<Snapshot> remote =
+                conflict.current_id().empty()
+                    ? client.latest_snapshot()
+                    : std::optional<Snapshot>(
+                          client.snapshot_by_id(conflict.current_id()));
+            if (!remote.has_value()) {
+                base.clear();
+                merged = local;
+                continue;
+            }
+            const nlohmann::json remote_payload =
+                payload_from_snapshot(*remote, key);
+            merged = merge_for_push(remote_payload, local, err);
+            if (fingerprint_state(normalize_sync_state(merged)) ==
+                fingerprint_state(normalize_sync_state(remote_payload))) {
+                return {remote->id, remote->created_at, true};
+            }
+            base = remote->id;
+        }
+    }
+    throw ToolError(ExitCode::Data, "CONFLICT", "snapshot push did not converge");
+}
+
+/* Live mode for add/dose/lab/weight: pull the newest revision, apply the same
+ * payload mutation the local commands use, and push it back through the
+ * optimistic merge loop. Read-only subcommands just print the pulled data. */
+int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
+                          std::ostream &out, std::ostream &err) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    if (unlocked.session.data.token.empty()) {
+        throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
+    }
+    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session.data.token);
+
+    const std::array<uint8_t, 32> key =
+        cloud_key_for(unlocked, parsed, in, out);
+    std::optional<Snapshot> current = client->latest_snapshot();
+    const nlohmann::json remote =
+        current.has_value() ? payload_from_snapshot(*current, key)
+                            : nlohmann::json::object();
+
+    std::ostringstream captured;
+    std::optional<nlohmann::json> updated;
+    if (parsed.command == "add") {
+        updated = apply_add(parsed, remote, captured, err);
+    } else if (parsed.command == "dose") {
+        updated = apply_dose(parsed, remote, captured);
+    } else if (parsed.command == "lab") {
+        updated = apply_lab(parsed, remote, captured);
+    } else if (parsed.command == "weight") {
+        updated = apply_weight(parsed, remote, captured);
+    } else {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "this command has no live mode");
+    }
+    if (!updated.has_value()) {
+        out << captured.str();
+        return 0;
+    }
+
+    /* Print the mutation line only after the write succeeds, so a failed push
+       never looks like a saved change. */
+    const PushResult pushed =
+        push_sync_payload(*client, key, *updated, err, current);
+    out << captured.str();
+    if (pushed.up_to_date) {
+        out << "already up to date (" << pushed.id << ")\n";
+    } else {
+        out << "pushed " << pushed.id << " (" << pushed.created_at << ")\n";
+    }
+    return 0;
+}
+
 int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                      std::ostream &err) {
     if (parsed.command_args.empty()) {
@@ -1103,58 +1221,14 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
                             "the input snapshot is not a sync payload object");
         }
 
-        std::string base;
-        nlohmann::json merged = local;
-        std::optional<Snapshot> current = client->latest_snapshot();
-        if (current.has_value()) {
-            const nlohmann::json remote_payload =
-                payload_from_snapshot(*current, key);
-            if (fingerprint_state(normalize_sync_state(remote_payload)) ==
-                fingerprint_state(normalize_sync_state(local))) {
-                out << "already up to date (" << current->id << ")\n";
-                return 0;
-            }
-            merged = merge_for_push(remote_payload, local, err);
-            if (fingerprint_state(normalize_sync_state(merged)) ==
-                fingerprint_state(normalize_sync_state(remote_payload))) {
-                out << "already up to date (" << current->id << ")\n";
-                return 0;
-            }
-            base = current->id;
+        const PushResult pushed = push_sync_payload(
+            *client, key, local, err, client->latest_snapshot());
+        if (pushed.up_to_date) {
+            out << "already up to date (" << pushed.id << ")\n";
+        } else {
+            out << "pushed " << pushed.id << " (" << pushed.created_at << ")\n";
         }
-        for (int attempt = 0; attempt < 3; ++attempt) {
-            try {
-                const Snapshot pushed =
-                    client->put_snapshot(encrypt_cloud_bundle(merged, key), base);
-                out << "pushed " << pushed.id << " (" << pushed.created_at << ")\n";
-                return 0;
-            } catch (const SnapshotConflictError &conflict) {
-                if (attempt == 2) {
-                    throw ToolError(ExitCode::Data, "CONFLICT",
-                                    "snapshot kept changing; try again");
-                }
-                std::optional<Snapshot> remote =
-                    conflict.current_id().empty()
-                        ? client->latest_snapshot()
-                        : std::optional<Snapshot>(
-                              client->snapshot_by_id(conflict.current_id()));
-                if (!remote.has_value()) {
-                    base.clear();
-                    merged = local;
-                    continue;
-                }
-                const nlohmann::json remote_payload =
-                    payload_from_snapshot(*remote, key);
-                merged = merge_for_push(remote_payload, local, err);
-                if (fingerprint_state(normalize_sync_state(merged)) ==
-                    fingerprint_state(normalize_sync_state(remote_payload))) {
-                    out << "already up to date (" << remote->id << ")\n";
-                    return 0;
-                }
-                base = remote->id;
-            }
-        }
-        throw ToolError(ExitCode::Data, "CONFLICT", "snapshot push did not converge");
+        return 0;
     }
 
     throw ToolError(ExitCode::Usage, "USAGE", "snapshot needs pull, push, or list");
@@ -1509,6 +1583,17 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         const Paths paths = resolve_paths(parsed.options.config_dir);
         if (Vault::exists(paths.vault_file)) {
             return command_look_remote(parsed, in, out, err);
+        }
+    }
+
+    const bool live_mutation = parsed.command == "add" ||
+                               parsed.command == "dose" ||
+                               parsed.command == "lab" ||
+                               parsed.command == "weight";
+    if (live_mutation && parsed.options.snapshot.empty()) {
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        if (Vault::exists(paths.vault_file)) {
+            return command_mutate_remote(parsed, in, out, err);
         }
     }
 
