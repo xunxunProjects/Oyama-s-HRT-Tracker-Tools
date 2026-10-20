@@ -49,12 +49,12 @@ unsupported.
   `transport.hrt: false`, reason `serverless`. The existing HTTPS tool API
   and web login remain unchanged. The client refuses `hrt://` and may use
   the warned HTTPS fallback. The same applies to other edge/serverless
-  runtimes that expose only HTTP(S) or cannot accept inbound raw TLS/client
-  certificates: Vercel Edge Functions, Netlify Edge Functions, Deno Deploy,
+  runtimes that expose only HTTP(S) or cannot accept inbound raw TLS:
+  Vercel Edge Functions, Netlify Edge Functions, Deno Deploy,
   AWS Lambda@Edge, and Fastly Compute@Edge, plus static hosting. The README
   and every PR that ships this feature must state the limitation.
 - **Self-hosted:** `pairing.supported: true` only when the operator enables
-  the feature; `transport.hrt: true` only when the TLS/mTLS listener is
+  the feature; `transport.hrt: true` only when the raw TLS listener is
   configured. Default off. Enabling requires an explicit configuration
   value and server key material; it never activates automatically.
 - The capability response is served over the pinned HTTPS origin, so a
@@ -74,7 +74,7 @@ unsupported.
   TLS, so private/LAN names are allowed when the pinned server certificate
   matches; the `https://` HTTP policy does not apply to the raw transport.
 - `hrt://` is a strict profile:
-  - clearnet: TLS 1.3, server SPKI pinned, client device certificate.
+  - clearnet: TLS 1.3, server SPKI pinned, signed device request frames.
   - `.onion`/`.i2p`: the configured `socks5h://` proxy is mandatory and the
     name is never resolved locally; the server still presents a pinned TLS
     identity or the transport's device-authenticated channel.
@@ -149,10 +149,11 @@ The web page may offer **Deny**. Denial and expiry invalidate the request.
 `POST /hrt/pair/poll` with `request_id` and `poll_secret` returns
 `pending`, `approved`, `denied`, `expired`, or `held`. On approval it
 returns a token, the user id, and the username. The token is bound to the
-origin and the device certificate fingerprint. `hrt://` requests are additionally bound
-to the device certificate by the transport. Over the HTTPS fallback the
-token remains origin-bound; request proof-of-possession can be added later
-without changing the pairing flow.
+origin and the device certificate fingerprint. `hrt://` request frames
+additionally carry the certificate and an ECDSA-SHA256 signature over the
+canonical method/path/body-hash/header string; the raw server verifies it
+before forwarding. Over the HTTPS fallback the token remains origin-bound
+and there is no device proof-of-possession.
 
 The CLI then prompts for the account password. The password is used only
 locally to derive the cloud-snapshot key; it is never sent. A wrong
@@ -243,10 +244,21 @@ Request records never expose the code or its hash.
 
 ### 8.1 Preferred transport
 
-Self-hosted: TLS 1.3 with a client device certificate (mTLS). The client
-generates a random device key pair at install, stores the private key in
-the encrypted vault, and obtains the server's pinned identity at pairing.
-No raw custom protocol is introduced in this phase.
+Self-hosted: TLS 1.3 with the server key pinned, plus an application-layer
+device signature. The client generates a random device key pair at install,
+stores the private key in the encrypted vault, sends the self-signed
+certificate with authenticated frames, and signs a canonical
+method/path/body-hash/header string. The TLS handshake does not request a
+client certificate, so normal certificate-chain validation stays enabled.
+The server verifies the signature and asks the web app about the
+certificate fingerprint.
+
+*Revision 2026-10-20:* the first draft used mTLS. It was replaced with
+application-layer signatures because a self-signed device certificate
+cannot be CA-validated; accepting it at the TLS layer requires disabling
+certificate validation, which is both a real hardening loss and a persistent
+static-analysis false positive. The signature gives the same proof of key
+possession without that trade-off.
 
 ### 8.2 Fallback
 
@@ -257,12 +269,16 @@ continue over HTTPS. Every run prints:
 > server, but the server or its TLS-terminating CDN can read request bodies.
 > Absolute encryption security is not guaranteed.
 
-The fallback:
+The fallback is the legacy HTTPS password login:
 
-- still uses SPKI pinning and the origin-bound approved token;
-- still never sends the account password;
-- still uses the locally derived cloud key for snapshot data;
-- must not silently ignore a failed capability or failed pin.
+- it still uses SPKI pinning and the origin-bound token;
+- it **does send the account password** to the server inside TLS, so the
+  server or a TLS-terminating CDN can read it;
+- it still uses the locally derived cloud key for snapshot data;
+- it must not silently ignore a failed pin.
+
+Web-approval pairing, where the password never leaves the machine, is
+available only over `hrt://`.
 
 `--require-hrt` disables the fallback. Cloudflare-hosted deployments are
 expected to use the fallback (or plain HTTPS) and must say so in their
@@ -314,8 +330,9 @@ code or its hash.
   matching only the authoritative IP, spoofed `X-Forwarded-For` rejected.
 - VM: rotating device keys does not bypass the account hold; disposable
   devices expire; no VM detection or hardware identifiers.
-- Transport: mTLS success, pin mismatch, capability unsupported, fallback
-  warning, `--require-hrt`, no password on the wire, proxy DNS.
+- Transport: signature success, missing/tampered signature, pin mismatch,
+  capability unsupported, fallback warning, `--require-hrt`, no password on
+  the `hrt://` wire, proxy DNS.
 - Data: retention cleanup, no plaintext IP/log/code, no third-party calls.
 - Web auth regression: existing login/session tests unchanged.
 
@@ -325,8 +342,8 @@ code or its hash.
    login pause, privacy-environment document, fallback warning copy.
 2. **Pairing protocol:** server endpoints + CLI state machine + loopback
    tests.
-3. **Self-hosted transport:** TLS 1.3/mTLS listener, device certificates,
-   capability advertisement, default off.
+3. **Self-hosted transport:** TLS 1.3 listener, device certificate plus
+   per-request signatures, capability advertisement, default off.
 4. **Web:** Account → Security, approval page, 12-hour list, trusted IPs.
 5. **Anti-abuse:** hold, counters, blackhole, device caps, cleanup.
 6. **Hardening/PR:** negative tests, threat model, PR notes for the
@@ -345,8 +362,9 @@ code or its hash.
 ## 14. Selected raw-server architecture
 
 The operator selected a standalone raw protocol server rather than an
-application-layer envelope over HTTPS. The selected shape is a **TLS/mTLS
-protocol adapter** in front of the existing self-hosted web application:
+application-layer envelope over HTTPS. The selected shape is a **TLS 1.3
+protocol adapter with signed device requests** in front of the existing
+self-hosted web application:
 
 - **One account system.** The web application remains the source of truth
   for accounts, pairing requests, device registrations, holds, and trusted
@@ -354,12 +372,12 @@ protocol adapter** in front of the existing self-hosted web application:
   not reimplement password auth. This keeps the original web auth code
   untouched and avoids a second security boundary to audit.
 - **Raw server responsibilities.** A standalone Node.js/TypeScript process
-  owns the TLS 1.3 listener, the server certificate, mTLS certificate
-  fingerprint checks, the framed protocol, connection limits, and the
-  loopback call to the web app. It stores no account data and has no device
-  CA; the web app owns the device registry.
-- **Wire protocol.** ALPN `hrt/1`; TLS 1.3 with a pinned server key; client
-  certificates required after pairing. Frames are a 4-byte big-endian
+  owns the TLS 1.3 listener, the server certificate, device-signature
+  verification, the framed protocol, connection limits, and the loopback
+  call to the web app. It stores no account data and has no device CA; the
+  web app owns the device registry.
+- **Wire protocol.** ALPN `hrt/1`; TLS 1.3 with a pinned server key; signed
+  device frames required after pairing. Frames are a 4-byte big-endian
   length followed by a JSON object with a request id, an operation
   (`pair.start`, `pair.poll`, `request`, `ping`), and a bounded body. `request`
   is allowlisted to `/api/tool/v1/*` and a small header set; the raw server
@@ -367,13 +385,14 @@ protocol adapter** in front of the existing self-hosted web application:
   16 MiB JSON body after base64 expansion) with per-connection timeouts,
   bounded connections, and request-id idempotency.
 - **Pairing path.** `pair.start` and `pair.poll` are the only operations
-  allowed without a client certificate. The CLI generates a self-signed
+  allowed without a device signature. The CLI generates a self-signed
   device certificate and sends it in `pair.start`; the web app records its
   SHA-256 fingerprint on approval. The raw server forwards the pair frames
   to the web app's internal `/api/tool/v1/hrt/*` endpoints over loopback,
   authenticated by a service token in a 0600 file, and returns the token.
-  Subsequent frames require a client certificate whose fingerprint the web
-  app authorizes.
+  Subsequent frames carry the certificate and an ECDSA signature over the
+  canonical request; the raw server verifies the signature and the web app
+  authorizes the fingerprint.
 - **Web approval.** The existing web session calls additive
   Account → Security endpoints in the web app; the web app owns the data.
   The raw server never serves the browser session.
@@ -388,7 +407,7 @@ protocol adapter** in front of the existing self-hosted web application:
   it. Cloudflare deployments cannot run the raw server and advertise it as
   unsupported.
 - **Client.** `hrt-tool` uses an OpenSSL-based raw client (TLS 1.3, SPKI
-  pin, optional client certificate) with a SOCKS5h connector for Tor/I2P.
+  pin, device request signatures) with a SOCKS5h connector for Tor/I2P.
   It falls back to HTTPS with the warning in §8.2 when the raw transport is
   unavailable or the operator requires it.
 

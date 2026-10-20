@@ -34,11 +34,24 @@ struct HrtServerCertificate {
 
 struct HrtClientOptions {
     std::string proxy;             /* socks5h://host:port, or empty */
-    std::string client_cert_pem;   /* empty for the first-contact probe */
+    /* Device certificate/key. The certificate travels in authenticated
+       request frames; the key signs them. Neither is used for TLS. */
+    std::string client_cert_pem;
     std::string client_key_pem;
     std::string expected_spki;     /* empty only for the probe */
     long timeout_s = 30;
 };
+
+/* Canonical bytes signed by the device key for an authenticated request:
+       hrt-request-v1\nMETHOD\nPATH\nsha256_hex(body)\nAUTHORIZATION\nIF_MATCH
+   Header names are lowercase; missing headers contribute an empty string.
+   Throws on control characters so a header cannot inject a new field. */
+std::string hrt_request_signing_string(
+    const std::string &method, const std::string &path, const std::string &body,
+    const std::map<std::string, std::string> &headers);
+/* ECDSA-SHA256 over the canonical bytes, returned as base64 DER. */
+std::string hrt_sign_request(const std::string &private_key_pem,
+                             const std::string &canonical);
 
 /* A short-lived hrt/1 connection over TLS 1.3. The server certificate is
    authenticated by the stored SPKI pin, not by a public CA. */

@@ -47,7 +47,7 @@ bool is_device_auth_error(const std::string &code) {
 }
 
 /* The authenticated half of the raw protocol: every call rides one pinned TLS
-   1.3 connection and presents the vault's device certificate. */
+   1.3 connection and signs the request with the vault's device key. */
 class HrtApiClient : public ApiClient {
 public:
     HrtApiClient(std::string server, HttpOptions options, std::string token)

@@ -119,5 +119,71 @@ int main() {
                      ToolError);
     }
 
+    {
+        const HrtDeviceIdentity identity =
+            generate_hrt_device_identity("hrt-sign-test");
+        const std::map<std::string, std::string> headers{
+            {"authorization", "Bearer abc"}, {"if-match", "rev-1"}};
+        const std::string body = "{\"data\":1}";
+        const std::string canonical =
+            hrt_request_signing_string("PUT", "/api/tool/v1/snapshot", body, headers);
+        CHECK_EQ(canonical, std::string("hrt-request-v1\nPUT\n/api/tool/v1/snapshot\n") +
+                                sha256_hex(body) + "\nBearer abc\nrev-1");
+
+        const std::string signature =
+            hrt_sign_request(identity.private_key_pem, canonical);
+        CHECK(!signature.empty());
+        const std::string der = base64_decode(signature);
+
+        std::unique_ptr<BIO, BioDeleter> cert_bio(
+            BIO_new_mem_buf(identity.certificate_pem.data(),
+                            static_cast<int>(identity.certificate_pem.size())));
+        std::unique_ptr<X509, CertDeleter> cert(
+            cert_bio ? PEM_read_bio_X509(cert_bio.get(), nullptr, nullptr, nullptr)
+                     : nullptr);
+        CHECK(cert != nullptr);
+        if (cert) {
+            std::unique_ptr<EVP_PKEY, KeyDeleter> public_key(
+                X509_get_pubkey(cert.get()));
+            CHECK(public_key != nullptr);
+            if (public_key) {
+                std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
+                    EVP_MD_CTX_new(), EVP_MD_CTX_free);
+                CHECK(context != nullptr);
+                if (context) {
+                    CHECK_EQ(EVP_DigestVerifyInit(context.get(), nullptr, EVP_sha256(),
+                                                  nullptr, public_key.get()),
+                             1);
+                    CHECK_EQ(EVP_DigestVerify(
+                                 context.get(),
+                                 reinterpret_cast<const unsigned char *>(der.data()),
+                                 der.size(),
+                                 reinterpret_cast<const unsigned char *>(canonical.data()),
+                                 canonical.size()),
+                             1);
+                    std::string tampered = canonical;
+                    tampered[0] = 'X';
+                    EVP_MD_CTX_reset(context.get());
+                    CHECK_EQ(EVP_DigestVerifyInit(context.get(), nullptr, EVP_sha256(),
+                                                  nullptr, public_key.get()),
+                             1);
+                    CHECK(EVP_DigestVerify(
+                              context.get(),
+                              reinterpret_cast<const unsigned char *>(der.data()),
+                              der.size(),
+                              reinterpret_cast<const unsigned char *>(tampered.data()),
+                              tampered.size()) != 1);
+                }
+            }
+        }
+
+        CHECK_THROWS(hrt_request_signing_string(
+                         "GET", "/x", "", {{"authorization", "a\nb"}}),
+                     ToolError);
+        CHECK_THROWS(hrt_request_signing_string("GET", "missing-slash", "", {}),
+                     ToolError);
+        CHECK_THROWS(hrt_request_signing_string("", "/x", "", {}), ToolError);
+    }
+
     return test_result();
 }

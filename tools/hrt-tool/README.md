@@ -190,9 +190,11 @@ expires after five minutes; a denied or expired request starts the same
 hardcoded 60-second login pause as a wrong password.
 
 The first `hrt://` login generates a random device key pair and self-signed
-certificate in the encrypted vault. Every later raw command authenticates
-with that certificate, and the web app binds the issued token to its
-fingerprint. `logout` revokes the token but keeps this per-install identity,
+certificate in the encrypted vault. Every later raw request is signed with
+that key and carries the certificate; the server verifies the signature
+before forwarding it, and the web app binds the issued token to the
+certificate fingerprint. The TLS handshake itself does not use a client
+certificate. `logout` revokes the token but keeps this per-install identity,
 so the next approval reuses the same device instead of consuming a new
 device slot; revoke the device itself under **Account → Security** when it
 should stop working. Use `--device-name NAME` to choose the label shown in
@@ -206,7 +208,7 @@ end-to-end encrypted.
 ### `hrt://` transport availability
 
 The self-hosted `hrt://` transport needs a server that can expose a raw
-TLS/TCP listener and accept client certificates. It is **not available** on
+TLS/TCP listener and verify signed device requests. It is **not available** on
 edge/serverless platforms that only expose HTTP(S), including Cloudflare
 Workers and Pages, Vercel Edge Functions, Netlify Edge Functions, Deno
 Deploy, AWS Lambda@Edge, and Fastly Compute@Edge. Those deployments keep the

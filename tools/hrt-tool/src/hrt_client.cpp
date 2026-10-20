@@ -354,6 +354,75 @@ std::string base64_decode(const std::string &data) {
     return result;
 }
 
+namespace {
+
+bool signing_field_is_safe(const std::string &value) {
+    return value.find('\n') == std::string::npos &&
+           value.find('\r') == std::string::npos;
+}
+
+std::string lowercase_header(const std::map<std::string, std::string> &headers,
+                             const std::string &name) {
+    const auto found = headers.find(name);
+    if (found == headers.end()) {
+        return {};
+    }
+    if (!signing_field_is_safe(found->second)) {
+        throw ToolError(ExitCode::Usage, "HRT_SIGNATURE",
+                        "a request header contains a newline");
+    }
+    return found->second;
+}
+
+} // namespace
+
+std::string hrt_request_signing_string(
+    const std::string &method, const std::string &path, const std::string &body,
+    const std::map<std::string, std::string> &headers) {
+    if (method.empty() || !signing_field_is_safe(method)) {
+        throw ToolError(ExitCode::Usage, "HRT_SIGNATURE",
+                        "invalid request method for signing");
+    }
+    if (path.empty() || path.front() != '/' || !signing_field_is_safe(path)) {
+        throw ToolError(ExitCode::Usage, "HRT_SIGNATURE",
+                        "invalid request path for signing");
+    }
+    return "hrt-request-v1\n" + method + "\n" + path + "\n" + sha256_hex(body) +
+           "\n" + lowercase_header(headers, "authorization") + "\n" +
+           lowercase_header(headers, "if-match");
+}
+
+std::string hrt_sign_request(const std::string &private_key_pem,
+                             const std::string &canonical) {
+    BIO *key_bio =
+        BIO_new_mem_buf(private_key_pem.data(), static_cast<int>(private_key_pem.size()));
+    EVP_PKEY *key =
+        key_bio ? PEM_read_bio_PrivateKey(key_bio, nullptr, nullptr, nullptr) : nullptr;
+    BIO_free(key_bio);
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    std::string signature;
+    if (key != nullptr && context != nullptr &&
+        EVP_DigestSignInit(context, nullptr, EVP_sha256(), nullptr, key) == 1 &&
+        EVP_DigestSignUpdate(context, canonical.data(), canonical.size()) == 1) {
+        size_t length = 0;
+        if (EVP_DigestSignFinal(context, nullptr, &length) == 1 && length > 0) {
+            std::string der(length, '\0');
+            if (EVP_DigestSignFinal(context, reinterpret_cast<unsigned char *>(&der[0]),
+                                    &length) == 1) {
+                der.resize(length);
+                signature = base64_encode(der);
+            }
+        }
+    }
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(key);
+    if (signature.empty()) {
+        throw ToolError(ExitCode::Data, "HRT_SIGNATURE",
+                        "cannot sign the request with the device key");
+    }
+    return signature;
+}
+
 std::string generate_hrt_code() {
     unsigned char bytes[64] = {};
     if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
@@ -573,30 +642,6 @@ HrtServerCertificate HrtClient::connect() {
     }
     SSL_CTX_set_min_proto_version(impl_->context, TLS1_3_VERSION);
     SSL_CTX_set_verify(impl_->context, SSL_VERIFY_NONE, nullptr);
-    if (!impl_->options.client_cert_pem.empty()) {
-        BIO *cert_bio = BIO_new_mem_buf(impl_->options.client_cert_pem.data(),
-                                        static_cast<int>(impl_->options.client_cert_pem.size()));
-        X509 *client_certificate =
-            cert_bio ? PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr) : nullptr;
-        BIO_free(cert_bio);
-        BIO *key_bio = BIO_new_mem_buf(impl_->options.client_key_pem.data(),
-                                       static_cast<int>(impl_->options.client_key_pem.size()));
-        EVP_PKEY *client_key =
-            key_bio ? PEM_read_bio_PrivateKey(key_bio, nullptr, nullptr, nullptr) : nullptr;
-        BIO_free(key_bio);
-        const bool ok =
-            client_certificate != nullptr && client_key != nullptr &&
-            SSL_CTX_use_certificate(impl_->context, client_certificate) == 1 &&
-            SSL_CTX_use_PrivateKey(impl_->context, client_key) == 1 &&
-            SSL_CTX_check_private_key(impl_->context) == 1;
-        X509_free(client_certificate);
-        EVP_PKEY_free(client_key);
-        if (!ok) {
-            impl_->close();
-            throw ToolError(ExitCode::Data, "HRT_IDENTITY",
-                            "cannot load the device certificate and key");
-        }
-    }
 
     impl_->ssl = SSL_new(impl_->context);
     if (impl_->ssl == nullptr || SSL_set_fd(impl_->ssl, impl_->fd) != 1) {
@@ -720,11 +765,21 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
 nlohmann::json HrtClient::request(const std::string &method, const std::string &path,
                                   const std::map<std::string, std::string> &headers,
                                   const std::string &body) {
+    if (impl_->options.client_cert_pem.empty() ||
+        impl_->options.client_key_pem.empty()) {
+        throw ToolError(ExitCode::Vault, "HRT_IDENTITY_MISSING",
+                        "the vault has no device identity; run hrt-tool login");
+    }
+    const std::string canonical =
+        hrt_request_signing_string(method, path, body, headers);
     nlohmann::json frame{{"op", "request"},
                          {"method", method},
                          {"path", path},
                          {"headers", headers},
-                         {"body_base64", base64_encode(body)}};
+                         {"body_base64", base64_encode(body)},
+                         {"device_certificate", impl_->options.client_cert_pem},
+                         {"device_signature",
+                          hrt_sign_request(impl_->options.client_key_pem, canonical)}};
     const nlohmann::json response = call(frame);
     if (response.contains("error") && response.at("error").is_object()) {
         const nlohmann::json &error = response.at("error");

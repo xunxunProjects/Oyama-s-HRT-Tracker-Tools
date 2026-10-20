@@ -46,7 +46,7 @@ public:
             return;
         }
         SSL_CTX_set_min_proto_version(context_, TLS1_3_VERSION);
-        SSL_CTX_set_verify(context_, SSL_VERIFY_PEER, accept_certificate);
+        SSL_CTX_set_verify(context_, SSL_VERIFY_NONE, nullptr);
         SSL_CTX_set_alpn_select_cb(context_, alpn_select, nullptr);
         BIO *cert_bio = BIO_new_mem_buf(identity_.certificate_pem.data(),
                                         static_cast<int>(identity_.certificate_pem.size()));
@@ -135,8 +135,6 @@ private:
         }
         return SSL_TLSEXT_ERR_NOACK;
     }
-
-    static int accept_certificate(int, X509_STORE_CTX *) { return 1; }
 
     static bool write_all(SSL *ssl, const std::string &data) {
         size_t offset = 0;

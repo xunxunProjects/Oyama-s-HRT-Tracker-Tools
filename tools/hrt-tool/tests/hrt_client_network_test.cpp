@@ -34,7 +34,50 @@ int alpn_select(SSL *, const unsigned char **out, unsigned char *outlen,
     return SSL_TLSEXT_ERR_NOACK;
 }
 
-int accept_certificate(int, X509_STORE_CTX *) { return 1; }
+bool verify_signed_request(const nlohmann::json &request) {
+    const std::string certificate_pem =
+        request.value("device_certificate", std::string{});
+    const std::string signature = request.value("device_signature", std::string{});
+    if (certificate_pem.empty() || signature.empty() ||
+        request.value("op", std::string{}) != "request") {
+        return false;
+    }
+    std::map<std::string, std::string> headers;
+    if (request.contains("headers") && request.at("headers").is_object()) {
+        for (const auto &entry : request.at("headers").items()) {
+            if (entry.value().is_string()) {
+                headers[entry.key()] = entry.value().get<std::string>();
+            }
+        }
+    }
+    const std::string body =
+        base64_decode(request.value("body_base64", std::string{}));
+    const std::string canonical = hrt_request_signing_string(
+        request.value("method", std::string{}),
+        request.value("path", std::string{}), body, headers);
+    const std::string der = base64_decode(signature);
+
+    BIO *cert_bio = BIO_new_mem_buf(certificate_pem.data(),
+                                    static_cast<int>(certificate_pem.size()));
+    X509 *certificate =
+        cert_bio ? PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr) : nullptr;
+    BIO_free(cert_bio);
+    EVP_PKEY *public_key = certificate ? X509_get_pubkey(certificate) : nullptr;
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    bool valid = false;
+    if (public_key != nullptr && context != nullptr &&
+        EVP_DigestVerifyInit(context, nullptr, EVP_sha256(), nullptr, public_key) == 1) {
+        valid = EVP_DigestVerify(
+                    context, reinterpret_cast<const unsigned char *>(der.data()),
+                    der.size(),
+                    reinterpret_cast<const unsigned char *>(canonical.data()),
+                    canonical.size()) == 1;
+    }
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(public_key);
+    X509_free(certificate);
+    return valid;
+}
 
 bool ssl_write_all(SSL *ssl, const std::string &data) {
     size_t offset = 0;
@@ -70,7 +113,7 @@ public:
             return;
         }
         SSL_CTX_set_min_proto_version(context_, TLS1_3_VERSION);
-        SSL_CTX_set_verify(context_, SSL_VERIFY_PEER, accept_certificate);
+        SSL_CTX_set_verify(context_, SSL_VERIFY_NONE, nullptr);
         SSL_CTX_set_alpn_select_cb(context_, alpn_select, nullptr);
         BIO *cert_bio = BIO_new_mem_buf(identity_.certificate_pem.data(),
                                         static_cast<int>(identity_.certificate_pem.size()));
@@ -200,7 +243,7 @@ private:
             } else if (request.value("op", std::string{}) == "request") {
                 body["method"] = request.value("method", std::string{});
                 body["path"] = request.value("path", std::string{});
-                body["clientCert"] = saw_client_certificate();
+                body["signed"] = verify_signed_request(request);
             } else if (request.value("op", std::string{}) == "pair.start") {
                 body["request_id"] = std::string(32, 'a');
                 body["poll_secret"] = std::string(64, 'b');
@@ -460,8 +503,8 @@ int main() {
             CHECK_EQ(body.value("method", std::string{}), std::string("GET"));
             CHECK_EQ(body.value("path", std::string{}),
                      std::string("/api/tool/v1/me"));
-            CHECK(body.value("clientCert", false));
-            CHECK(server.saw_client_certificate());
+            CHECK(body.value("signed", false));
+            CHECK(!server.saw_client_certificate());
             client.close();
         }
     }

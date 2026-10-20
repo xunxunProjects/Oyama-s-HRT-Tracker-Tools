@@ -111,7 +111,13 @@ int main() {
 
             client->logout();
 
-            CHECK(server.saw_client_certificate());
+            CHECK(!server.saw_client_certificate());
+            for (const nlohmann::json &frame : server.frames()) {
+                if (frame.value("op", std::string{}) == "request") {
+                    CHECK(frame.contains("device_certificate"));
+                    CHECK(frame.contains("device_signature"));
+                }
+            }
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 bool saw_me = false;
