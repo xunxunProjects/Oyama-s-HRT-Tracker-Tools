@@ -8,6 +8,7 @@
 #include "completion.h"
 #include "console.h"
 #include "encrypted_file.h"
+#include "f2f_bridge.h"
 #include "link.h"
 #include "entropy.h"
 #include "error.h"
@@ -1671,6 +1672,7 @@ const std::set<std::string> &known_commands() {
         "add",     "dose",    "lab",      "weight",    "export", "import",
         "snapshot", "config", "logs",     "add-link",  "commit-server", "link",
         "console",  "status", "proxy",    "doctor",    "completion",    "help",
+        "f2f",
     };
     return kCommands;
 }
@@ -1782,6 +1784,10 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                         "server compute is reserved; use --compute local");
     }
 
+    if (parsed.command == "f2f") {
+        /* Raw pass-through: never read the vault or the active link. */
+        return run_f2f(parsed.command_args, out, err);
+    }
     if (parsed.command == "version") {
         return command_version(parsed, out);
     }

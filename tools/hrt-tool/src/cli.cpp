@@ -245,6 +245,7 @@ void print_help(std::ostream &out) {
         << "  doctor               check the vault, proxy, and environment\n"
         << "  completion SHELL     print bash/zsh/fish completion\n"
         << "  help [command]       show help or the exit-code table\n"
+        << "  f2f ...              F2F keyring/OpenPGP commands\n"
         << "  logs show            decrypt an encrypted log file\n"
         << "  version              print versions (--json for JSON)\n\n"
         << "Global flags:\n"

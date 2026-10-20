@@ -1,5 +1,6 @@
 #include "version.h"
 
+#include "f2f_bridge.h"
 #include "hrtcore/hrtcore.h"
 #include "hrtprint/hrtprint.h"
 
@@ -17,6 +18,7 @@ std::string format_version_line() {
     out << "hrt-tool " << version.major << '.' << version.minor << '.' << version.patch << '\n';
     out << "hrtcore " << hrtcore_version() << " (ABI " << hrtcore_abi_version() << ")\n";
     out << "hrtprint " << hrtprint_version() << '\n';
+    out << "f2f " << f2f_version() << '\n';
     return out.str();
 }
 
@@ -29,6 +31,7 @@ std::string format_version_json() {
         {"tool", tool},
         {"core", hrtcore_version()},
         {"print", hrtprint_version()},
+        {"f2f", f2f_version()},
     }
         .dump(2);
 }

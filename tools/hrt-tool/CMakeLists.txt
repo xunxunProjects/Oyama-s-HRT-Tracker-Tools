@@ -35,6 +35,27 @@ add_custom_command(
 )
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
+find_program(GO_EXECUTABLE go REQUIRED)
+set(HRTF2F_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../hrt-f2f)
+set(HRTF2F_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/hrtf2f)
+set(HRTF2F_LIB ${HRTF2F_BUILD_DIR}/libhrtf2f.a)
+set(HRTF2F_HEADER ${HRTF2F_BUILD_DIR}/libhrtf2f.h)
+file(GLOB HRTF2F_GO_SOURCES CONFIGURE_DEPENDS ${HRTF2F_DIR}/*.go)
+add_custom_command(
+    OUTPUT ${HRTF2F_LIB} ${HRTF2F_HEADER}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${HRTF2F_BUILD_DIR}
+    COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
+            ${GO_EXECUTABLE} build -buildmode=c-archive -trimpath
+            -o ${HRTF2F_LIB} .
+    DEPENDS ${HRTF2F_GO_SOURCES} ${HRTF2F_DIR}/go.mod ${HRTF2F_DIR}/go.sum
+    WORKING_DIRECTORY ${HRTF2F_DIR}
+    COMMENT "Building the Go F2F library"
+    VERBATIM
+)
+add_custom_target(hrtf2f_build DEPENDS ${HRTF2F_LIB} ${HRTF2F_HEADER})
+set_source_files_properties(src/f2f_bridge.cpp PROPERTIES
+    OBJECT_DEPENDS ${HRTF2F_HEADER})
+
 add_library(hrtcpp STATIC
     src/add_interactive.cpp
     src/api_live.cpp
@@ -48,6 +69,7 @@ add_library(hrtcpp STATIC
     src/encrypted_file.cpp
     src/entropy.cpp
     src/exit_codes.cpp
+    src/f2f_bridge.cpp
     src/file_io.cpp
     src/format.cpp
     src/http.cpp
@@ -72,16 +94,20 @@ add_library(hrtcpp STATIC
     src/vault.cpp
     src/version.cpp
 )
-target_include_directories(hrtcpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(hrtcpp PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HRTF2F_BUILD_DIR}
+)
 target_link_libraries(hrtcpp PUBLIC
     hrtcore
     nlohmann_json::nlohmann_json
     ${HRTPRINT_LIB}
+    ${HRTF2F_LIB}
     CURL::libcurl
     OpenSSL::SSL
     OpenSSL::Crypto
 )
-add_dependencies(hrtcpp hrtprint_build)
+add_dependencies(hrtcpp hrtprint_build hrtf2f_build)
 
 add_executable(hrt-tool src/main.cpp)
 target_link_libraries(hrt-tool PRIVATE
@@ -163,6 +189,10 @@ if(BUILD_TESTING)
     add_executable(version_json_test tests/version_json_test.cpp)
     target_link_libraries(version_json_test PRIVATE hrtcpp)
     add_test(NAME version_json COMMAND version_json_test)
+
+    add_executable(f2f_bridge_test tests/f2f_bridge_test.cpp)
+    target_link_libraries(f2f_bridge_test PRIVATE hrtcpp)
+    add_test(NAME f2f_bridge COMMAND f2f_bridge_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

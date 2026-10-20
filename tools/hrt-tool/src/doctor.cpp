@@ -1,6 +1,7 @@
 #include "commands.h"
 
 #include "error.h"
+#include "f2f_bridge.h"
 #include "http.h"
 #include "paths.h"
 #include "session.h"
@@ -115,6 +116,7 @@ int command_doctor(const ParsedArgs &parsed, std::istream &in, std::ostream &out
 
     add_check(checks, "core", true, hrtcore_version());
     add_check(checks, "printer", true, hrtprint_version());
+    add_check(checks, "f2f", true, f2f_version());
     if (env_proxy_present()) {
         add_check(checks, "environment proxy", false,
                   "set but ignored by hrt-tool", true);
