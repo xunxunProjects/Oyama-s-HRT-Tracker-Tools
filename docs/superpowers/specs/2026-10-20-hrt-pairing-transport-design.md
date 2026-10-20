@@ -48,7 +48,11 @@ unsupported.
 - **Cloudflare-hosted:** `pairing.supported: false`,
   `transport.hrt: false`, reason `serverless`. The existing HTTPS tool API
   and web login remain unchanged. The client refuses `hrt://` and may use
-  the warned HTTPS fallback.
+  the warned HTTPS fallback. The same applies to other edge/serverless
+  runtimes that expose only HTTP(S) or cannot accept inbound raw TLS/client
+  certificates: Vercel Edge Functions, Netlify Edge Functions, Deno Deploy,
+  AWS Lambda@Edge, and Fastly Compute@Edge, plus static hosting. The README
+  and every PR that ships this feature must state the limitation.
 - **Self-hosted:** `pairing.supported: true` only when the operator enables
   the feature; `transport.hrt: true` only when the TLS/mTLS listener is
   configured. Default off. Enabling requires an explicit configuration
@@ -61,8 +65,14 @@ unsupported.
 ## 4. The `hrt://` scheme
 
 - Syntax: `hrt://host[:port][/]`. No userinfo, query, fragment, or path
-  beyond `/`. The host is a real DNS name, `.onion`, or `.i2p` name; the
-  scheme does not introduce a new naming system.
+  beyond `/`. The host is a real DNS name, loopback, Tor v3 `.onion`
+  (exactly 56 base32 characters), an I2P address-book name ending in
+  `.i2p`, or an I2P destination hash (exactly 52 base32 characters plus
+  `.b32.i2p`). The scheme does not introduce a new naming system.
+- Special names are classified before any connection: `.onion` and `.i2p`
+  require `socks5h://` and are never resolved locally. `hrt://` itself uses
+  TLS, so private/LAN names are allowed when the pinned server certificate
+  matches; the `https://` HTTP policy does not apply to the raw transport.
 - `hrt://` is a strict profile:
   - clearnet: TLS 1.3, server SPKI pinned, client device certificate.
   - `.onion`/`.i2p`: the configured `socks5h://` proxy is mandatory and the

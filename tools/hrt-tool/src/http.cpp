@@ -440,19 +440,54 @@ bool valid_onion_v3(const std::string &host) {
     });
 }
 
+bool is_b32_i2p_host(const std::string &host) {
+    const std::string name = lower_ascii(host);
+    return name.size() > 8 &&
+           name.compare(name.size() - 8, 8, ".b32.i2p") == 0;
+}
+
 bool valid_i2p_host(const std::string &host) {
     const std::string name = lower_ascii(host);
     if (!is_i2p_host(name)) {
         return false;
     }
+    if (is_b32_i2p_host(name)) {
+        /* A destination hash is exactly 52 base32 characters. */
+        const std::string label = name.substr(0, name.size() - 8);
+        if (label.size() != 52) {
+            return false;
+        }
+        return std::all_of(label.begin(), label.end(), [](unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '2' && c <= '7');
+        });
+    }
+    /* An address-book name: DNS-shaped labels, each 1..63 characters. */
     const std::string label = name.substr(0, name.size() - 4);
     if (label.empty() || label.size() > 255) {
         return false;
     }
-    return std::all_of(label.begin(), label.end(), [](unsigned char c) {
-        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' ||
-               c == '-' || c == '_';
-    });
+    size_t start = 0;
+    while (start <= label.size()) {
+        const size_t dot = label.find('.', start);
+        const size_t end = dot == std::string::npos ? label.size() : dot;
+        const size_t length = end - start;
+        if (length == 0 || length > 63) {
+            return false;
+        }
+        for (size_t i = start; i < end; ++i) {
+            const unsigned char c = static_cast<unsigned char>(label[i]);
+            const bool edge = i == start || i == end - 1;
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                  c == '_' || (c == '-' && !edge))) {
+                return false;
+            }
+        }
+        if (dot == std::string::npos) {
+            break;
+        }
+        start = dot + 1;
+    }
+    return true;
 }
 
 std::string suggested_proxy_for_host(const std::string &host) {

@@ -41,6 +41,12 @@
 - A failed credential login is recorded in the encrypted vault and blocks
   another login attempt for 60 seconds. Server-side rate limiting remains
   the authoritative control.
+- I2P destination hashes (52 base32 characters plus `.b32.i2p`) are
+  validated alongside `.i2p` address-book names; Tor v3 `.onion` names
+  remain 56 base32 characters. A SOCKS5 stub test asserts that a `socks5h`
+  request sends the unresolved target name to the proxy, proving target DNS
+  stays at the proxy. Documented that `hrt://` requires a self-hosted raw
+  TLS listener and is unavailable on edge/serverless platforms.
 
 ## 0.1.0 — 2026-10-19 (pre-release)
 

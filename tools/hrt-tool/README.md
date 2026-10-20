@@ -172,6 +172,29 @@ origin's token and device pass). `--no-cache-cloud-key` keeps the derived key ou
 of the vault on that command; pass it to every command that may derive the key,
 or the first `pull`/`look` will cache it.
 
+### `hrt://` transport availability
+
+The self-hosted `hrt://` transport needs a server that can expose a raw
+TLS/TCP listener and accept client certificates. It is **not available** on
+edge/serverless platforms that only expose HTTP(S), including Cloudflare
+Workers and Pages, Vercel Edge Functions, Netlify Edge Functions, Deno
+Deploy, AWS Lambda@Edge, and Fastly Compute@Edge. Those deployments
+advertise `hrt` as unsupported; the client refuses `hrt://` there and may
+use the warned HTTPS fallback described in
+[`docs/PRIVACY_ENVIRONMENTS.md`](docs/PRIVACY_ENVIRONMENTS.md#https-fallback).
+Cloudflare-hosted deployments keep the existing HTTPS API.
+
+Supported hosts for `hrt://` and the HTTPS policy:
+
+- ordinary DNS names and loopback addresses;
+- Tor v3 `.onion` names: exactly 56 base32 characters plus `.onion`;
+- I2P address-book names ending in `.i2p`;
+- I2P destination hashes: exactly 52 base32 characters plus `.b32.i2p`.
+
+`.onion` and `.i2p` names require a `socks5h://` proxy; the name is never
+resolved locally. If a proxy is configured, it resolves every target name,
+including ordinary DNS names.
+
 ### Trust, Tor, and I2P (M4)
 
 Before an authenticated command talks to a server, it fetches
