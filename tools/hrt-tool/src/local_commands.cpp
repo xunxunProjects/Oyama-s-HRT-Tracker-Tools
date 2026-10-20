@@ -6,12 +6,14 @@
 #include "entropy.h"
 #include "error.h"
 #include "file_io.h"
+#include "format.h"
 #include "hrtcore/hrtcore.h"
 #include "hrtprint/hrtprint.h"
 #include "model.h"
 #include "pk.h"
 #include "prompt.h"
 #include "snapshot.h"
+#include "status.h"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +32,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -64,29 +67,6 @@ std::time_t epoch_from_tm(std::tm &tm, bool utc) {
 #endif
 }
 
-std::string format_time(double hours, bool utc) {
-    const std::time_t seconds = static_cast<std::time_t>(hours * 3600.0);
-    std::tm tm{};
-#ifdef _WIN32
-    if (utc) {
-        gmtime_s(&tm, &seconds);
-    } else {
-        localtime_s(&tm, &seconds);
-    }
-#else
-    if (utc) {
-        gmtime_r(&seconds, &tm);
-    } else {
-        localtime_r(&seconds, &tm);
-    }
-#endif
-    char buffer[64] = {};
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &tm);
-    std::string out(buffer);
-    out += utc ? " UTC" : " local";
-    return out;
-}
-
 std::string iso_now() {
     const std::time_t seconds = std::time(nullptr);
     std::tm tm{};
@@ -98,22 +78,6 @@ std::string iso_now() {
     char buffer[64] = {};
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S.000Z", &tm);
     return buffer;
-}
-
-std::string format_duration(double hours) {
-    if (!std::isfinite(hours) || hours < 0.0) {
-        hours = 0.0;
-    }
-    const int total_minutes = static_cast<int>(std::floor(hours * 60.0));
-    const int days = total_minutes / (24 * 60);
-    const int hour_part = (total_minutes / 60) % 24;
-    const int minutes = total_minutes % 60;
-    std::ostringstream out;
-    if (days > 0) {
-        out << days << "d ";
-    }
-    out << hour_part << "h " << minutes << "m";
-    return out.str();
 }
 
 double parse_duration_hours(const std::string &text) {
@@ -549,40 +513,6 @@ double class_value(const PkResult &result, int ester, double hour) {
     return hrtcore_pk_interp_e2(&result.raw(), hour);
 }
 
-std::string format_concentration(double value, int ester) {
-    std::ostringstream out;
-    out << std::fixed;
-    if (is_t_ester(ester)) {
-        out << std::setprecision(0) << value << " ng/dL";
-    } else if (ester == HRTCORE_ESTER_CPA) {
-        out << std::setprecision(2) << value << " ng/mL";
-    } else {
-        out << std::setprecision(1) << value << " pg/mL";
-    }
-    return out.str();
-}
-
-std::string format_lab_value(double value, const std::string &unit) {
-    std::ostringstream out;
-    out << std::fixed;
-    if (unit == "pg/ml") {
-        out << std::setprecision(1) << value << " pg/mL (" << std::setprecision(1)
-            << value * 3.671 << " pmol/L)";
-    } else if (unit == "pmol/l") {
-        out << std::setprecision(1) << value << " pmol/L (" << std::setprecision(1)
-            << value / 3.671 << " pg/mL)";
-    } else if (unit == "ng/dl") {
-        out << std::setprecision(1) << value << " ng/dL (" << std::setprecision(2)
-            << value / 28.842 << " nmol/L)";
-    } else if (unit == "nmol/l") {
-        out << std::setprecision(2) << value << " nmol/L (" << std::setprecision(1)
-            << value * 28.842 << " ng/dL)";
-    } else {
-        out << std::setprecision(1) << value << " " << unit;
-    }
-    return out.str();
-}
-
 ModeKey parse_mode_option(const std::string &value) {
     return value == "transmasc" ? ModeKey::Transmasc : ModeKey::Transfem;
 }
@@ -737,7 +667,7 @@ void render_view(const json &view, bool as_json, std::ostream &out) {
     out.write(buffer.data(), static_cast<std::streamsize>(length));
 }
 
-std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags) {
+std::vector<std::pair<std::string, double>> parse_offsets_impl(const CommandFlags &flags) {
     if (flags.values.count("--at") != 0) {
         std::vector<std::pair<std::string, double>> offsets;
         std::istringstream stream(flags.values.at("--at"));
@@ -759,7 +689,10 @@ std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &fl
             {"24h", 24.0},      {"2d", 48.0}};
 }
 
-int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream &out) {
+json build_pk_view_impl(const ParsedArgs &parsed, const json &raw_payload,
+                        const std::vector<std::pair<std::string, double>> &offsets,
+                        std::ostream &err) {
+    (void)err;
     const json payload = normalize_sync_payload(raw_payload);
     const ModeKey mode = resolve_mode(parsed, payload, false);
     const std::string mode_name = mode_key_name(mode);
@@ -803,6 +736,7 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
 
     json view;
     view["now"] = format_time(current, parsed.options.utc);
+    view["nowStatus"] = format_time_status(current, parsed.options.utc);
     view["mode"] = mode_name;
     view["weightKg"] = weight;
     view["compounds"] = json::array();
@@ -812,6 +746,7 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
             int route;
             int ester;
             double last;
+            double dose;
         };
         std::map<std::pair<int, int>, Group> groups;
         for (const PkEvent &event : events) {
@@ -822,17 +757,21 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
             const std::pair<int, int> key{event.route, event.ester};
             const auto found = groups.find(key);
             if (found == groups.end()) {
-                groups[key] = Group{event.route, event.ester, event.time_h};
+                groups[key] =
+                    Group{event.route, event.ester, event.time_h, event.dose_mg};
             } else if (event.time_h > found->second.last) {
                 found->second.last = event.time_h;
+                found->second.dose = event.dose_mg;
             }
         }
-        const auto offsets = parse_offsets(flags);
         for (const auto &[key, group] : groups) {
             json compound;
             compound["drug"] = drug_display(group.ester);
             compound["route"] = route_display(group.route);
+            compound["dose"] = format_dose(group.dose);
             compound["lastDose"] = format_duration(current - group.last);
+            compound["lastDoseStatus"] = format_elapsed(current - group.last);
+            compound["lastDoseHours"] = current - group.last;
             compound["now"] =
                 format_concentration(class_value(*simulation, group.ester, current),
                                      group.ester);
@@ -871,12 +810,16 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
         const std::string assay = string_or(lab, "assay", "");
         const bool t_unit = unit == "ng/dl" || unit == "nmol/l";
         json view_lab;
-        view_lab["time"] =
-            format_time(number_or(lab, "timeH", 0.0), parsed.options.utc);
+        const double lab_time = number_or(lab, "timeH", 0.0);
+        const double lab_value = number_or(lab, "concValue", 0.0);
+        view_lab["time"] = format_time(lab_time, parsed.options.utc);
+        view_lab["statusTime"] = format_time_status(lab_time, parsed.options.utc);
         view_lab["name"] = t_unit ? "Testosterone" : "Estradiol";
-        view_lab["value"] = format_lab_value(number_or(lab, "concValue", 0.0), unit);
+        view_lab["value"] = format_lab_value(lab_value, unit);
+        view_lab["statusValue"] = format_lab_value_status(lab_value, unit);
         view_lab["method"] =
             assay == "lcms" ? "LC-MS/MS" : (assay == "immuno" ? "Immunoassay" : "");
+        view_lab["statusMethod"] = format_assay(assay);
         view["labs"].push_back(view_lab);
     }
 
@@ -886,6 +829,14 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
     }
     view["warnings"].push_back(
         "warning: uncalibrated baseline (calibration is not ported yet)");
+    return view;
+}
+
+int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream &out) {
+    const CommandFlags flags =
+        parse_command_flags(parsed.command_args, {"--at", "--labs"}, {"--all", "-a"});
+    const json view =
+        build_pk_view_impl(parsed, raw_payload, parse_offsets_impl(flags), out);
     render_view(view, parsed.options.json, out);
     return 0;
 }
@@ -1345,6 +1296,46 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
 }
 
 } // namespace
+
+nlohmann::json build_pk_view(
+    const ParsedArgs &parsed, const nlohmann::json &payload,
+    const std::vector<std::pair<std::string, double>> &offsets, std::ostream &err) {
+    return build_pk_view_impl(parsed, payload, offsets, err);
+}
+
+std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags) {
+    return parse_offsets_impl(flags);
+}
+
+int handle_status_local(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                        std::ostream &err) {
+    const bool all =
+        std::find(parsed.command_args.begin(), parsed.command_args.end(), "all") !=
+        parsed.command_args.end();
+    const CommandFlags flags =
+        parse_command_flags(parsed.command_args, {"--watch"}, {});
+    int watch = 0;
+    if (flags.values.count("--watch") != 0) {
+        watch = parse_watch_seconds(flags.values.at("--watch"));
+    }
+
+    LocalContext context = open_context(parsed, in, out, false);
+    do {
+        const nlohmann::json view =
+            build_status_view(parsed, context.payload, all, err);
+        if (parsed.options.json) {
+            out << view.dump(2) << "\n";
+        } else {
+            render_status_table(view, all, out);
+        }
+        out.flush();
+        if (watch <= 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(watch));
+    } while (true);
+    return 0;
+}
 
 nlohmann::json apply_add(const ParsedArgs &parsed, nlohmann::json payload,
                          std::ostream &out, std::ostream &err) {

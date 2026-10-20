@@ -2,6 +2,7 @@
 
 #include "api.h"
 #include "backup_envelope.h"
+#include "command_flags.h"
 #include "console.h"
 #include "encrypted_file.h"
 #include "link.h"
@@ -17,6 +18,7 @@
 #include "prompt.h"
 #include "session.h"
 #include "snapshot.h"
+#include "status.h"
 #include "trust.h"
 #include "vault.h"
 #include "version.h"
@@ -868,24 +870,12 @@ int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out
     return 0;
 }
 
-int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                        std::ostream &err, SessionContext *context) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
-    if (unlocked.session().data.token.empty()) {
-        throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
-    }
-    const std::string server = authenticated_server(parsed, unlocked.session().data);
-    const std::string trusted_pin =
-        ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
-    http.pinned_spki_sha256 = trusted_pin;
-    std::unique_ptr<ApiClient> client =
-        make_api_client(server, http, unlocked.session().data.token);
-    std::optional<Snapshot> snapshot;
+std::optional<Snapshot> fetch_latest_snapshot(ApiClient &client,
+                                              const ParsedArgs &parsed,
+                                              std::ostream &err) {
     for (int attempt = 0;; ++attempt) {
         try {
-            snapshot = client->latest_snapshot();
-            break;
+            return client.latest_snapshot();
         } catch (const NetworkFailure &failure) {
             const bool debug = parsed.options.debug || parsed.options.trace;
             if (!should_retry(failure.kind(), true, debug, attempt)) {
@@ -901,6 +891,22 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
                 std::chrono::milliseconds(attempt == 0 ? 500 : 1500));
         }
     }
+}
+
+int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                        std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
+        throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
+    }
+    const std::string server = authenticated_server(parsed, unlocked.session().data);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session().data.token);
+    std::optional<Snapshot> snapshot = fetch_latest_snapshot(*client, parsed, err);
     if (!snapshot.has_value()) {
         throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
                         "the account has no snapshot yet");
@@ -908,6 +914,65 @@ int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream
     const std::array<uint8_t, 32> key =
         cloud_key_for(unlocked, parsed, in, out);
     return handle_look_payload(parsed, payload_from_snapshot(*snapshot, key), out);
+}
+
+int command_status_remote(const ParsedArgs &parsed, std::istream &in,
+                          std::ostream &out, std::ostream &err,
+                          SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
+        throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
+    }
+
+    ParsedArgs effective = parsed;
+    if (effective.options.mode.empty()) {
+        effective.options.mode = unlocked.session().data.mode;
+    }
+    const std::string server =
+        authenticated_server(effective, unlocked.session().data);
+    const std::string trusted_pin =
+        ensure_trust(unlocked, effective, in, err, server);
+    HttpOptions http =
+        http_options_for(effective, unlocked.session().data, err);
+    http.pinned_spki_sha256 = trusted_pin;
+    std::unique_ptr<ApiClient> client =
+        make_api_client(server, http, unlocked.session().data.token);
+    const std::optional<Snapshot> snapshot =
+        fetch_latest_snapshot(*client, effective, err);
+    if (!snapshot.has_value()) {
+        throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
+                        "the account has no snapshot yet");
+    }
+    const std::array<uint8_t, 32> key =
+        cloud_key_for(unlocked, effective, in, out);
+    const nlohmann::json payload =
+        payload_from_snapshot(*snapshot, key);
+
+    const bool all =
+        std::find(effective.command_args.begin(), effective.command_args.end(),
+                  "all") != effective.command_args.end();
+    const CommandFlags flags =
+        parse_command_flags(effective.command_args, {"--watch"}, {});
+    int watch = 0;
+    if (flags.values.count("--watch") != 0) {
+        watch = parse_watch_seconds(flags.values.at("--watch"));
+    }
+
+    do {
+        const nlohmann::json view =
+            build_status_view(effective, payload, all, err);
+        if (effective.options.json) {
+            out << view.dump(2) << "\n";
+        } else {
+            render_status_table(view, all, out);
+        }
+        out.flush();
+        if (watch <= 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(watch));
+    } while (true);
+    return 0;
 }
 
 nlohmann::json merge_for_push(const nlohmann::json &remote,
@@ -1567,7 +1632,7 @@ const std::set<std::string> &known_commands() {
         "version", "init",    "login",    "logout",    "whoami", "look",
         "add",     "dose",    "lab",      "weight",    "export", "import",
         "snapshot", "config", "logs",     "add-link",  "commit-server", "link",
-        "console",
+        "console",  "status",
     };
     return kCommands;
 }
@@ -1722,6 +1787,16 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         const std::string name =
             parsed.command_args.empty() ? "logs" : "logs " + parsed.command_args.front();
         return command_stub(name, parsed, in, out, err, context);
+    }
+
+    if (parsed.command == "status") {
+        if (parsed.options.snapshot.empty()) {
+            const Paths paths = resolve_paths(parsed.options.config_dir);
+            if (Vault::exists(paths.vault_file)) {
+                return command_status_remote(parsed, in, out, err, context);
+            }
+        }
+        return handle_status_local(parsed, in, out, err);
     }
 
     if (parsed.command == "look" && parsed.options.snapshot.empty()) {
