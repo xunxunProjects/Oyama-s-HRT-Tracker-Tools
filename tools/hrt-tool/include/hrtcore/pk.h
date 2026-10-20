@@ -99,12 +99,15 @@ void hrtcore_pk_defaults(hrtcore_pk_params *out);
 
 /*
  * Runs the simulation with a caller-supplied "now_h" so results are
- * reproducible. The grid and the four arrays are malloc'd; free them with
- * hrtcore_pk_result_free. Returns HRTCORE_ERR_NO_DATA when no modelled event
- * remains or the weight is not positive.
+ * reproducible. `birth_year` applies logic.ts's age clearance adjustment to
+ * each dose at the time it was taken; 0 means no year of birth, and values
+ * below 1900 are treated the same way. The grid and the four arrays are
+ * malloc'd; free them with hrtcore_pk_result_free. Returns
+ * HRTCORE_ERR_NO_DATA when no modelled event remains or the weight is not
+ * positive.
  */
 int hrtcore_pk_run(const hrtcore_dose_event *events, size_t count, double weight_kg,
-                   const hrtcore_pk_params *params, double now_h,
+                   const hrtcore_pk_params *params, int32_t birth_year, double now_h,
                    hrtcore_pk_result *out, hrtcore_error *err);
 
 void hrtcore_pk_result_free(hrtcore_pk_result *result);

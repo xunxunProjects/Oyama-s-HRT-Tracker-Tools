@@ -40,7 +40,7 @@ private:
     friend std::optional<PkResult> run_pk(const std::vector<PkEvent> &events,
                                           double weight_kg,
                                           const hrtcore_pk_params &params,
-                                          double now_h);
+                                          double now_h, int birth_year);
     explicit PkResult(hrtcore_pk_result result) : result_(result) {}
 
     hrtcore_pk_result result_{};
@@ -53,7 +53,8 @@ hrtcore_pk_params default_pk_params();
 hrtcore_pk_params sanitize_pk_params(const nlohmann::json &raw);
 
 std::optional<PkResult> run_pk(const std::vector<PkEvent> &events, double weight_kg,
-                               const hrtcore_pk_params &params, double now_h);
+                               const hrtcore_pk_params &params, double now_h,
+                               int birth_year = 0);
 
 PkSample interpolate(const PkResult &result, double hour);
 

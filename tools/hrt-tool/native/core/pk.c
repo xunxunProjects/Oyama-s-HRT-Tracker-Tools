@@ -336,19 +336,43 @@ static void zero_params(pk_params_t *out, double k3) {
     out->k2_slow = 0.0;
 }
 
+/* Mirrors ageClearanceMultiplier in logic.ts. The slope is per year of age;
+   outside 19..75 the multiplier holds at its end value, and 0 (or an
+   implausible year) means no adjustment. */
+static double age_clearance_multiplier(bool testosterone, int32_t birth_year,
+                                       double time_h) {
+    if (birth_year < 1900) {
+        return 1.0;
+    }
+    const double hours_per_year = 365.2425 * 24.0;
+    double age = 1970.0 + time_h / hours_per_year -
+                 ((double)birth_year + 0.5);
+    if (age < 19.0) {
+        age = 19.0;
+    } else if (age > 75.0) {
+        age = 75.0;
+    }
+    const double slope = testosterone ? log(1821.0 / 1390.0) / 40.0
+                                      : log(1.0 / 0.75) / 52.0;
+    return exp(-slope * (age - 54.0));
+}
+
 static pk_params_t resolve_params(const hrtcore_dose_event *event,
-                                  const hrtcore_pk_params *params) {
-    const double default_k3 = event->route == HRTCORE_ROUTE_INJECTION
-                                  ? params->e2_kClearInj
-                                  : params->e2_kClear;
+                                  const hrtcore_pk_params *params,
+                                  int32_t birth_year) {
+    const double default_k3 =
+        (event->route == HRTCORE_ROUTE_INJECTION ? params->e2_kClearInj
+                                                 : params->e2_kClear) *
+        age_clearance_multiplier(false, birth_year, event->time_h);
     const double to_e2 = get_to_e2_factor(event->ester);
     pk_params_t out;
     memset(&out, 0, sizeof(out));
 
     if (is_testosterone_ester(event->ester)) {
-        const double t_k3 = event->route == HRTCORE_ROUTE_INJECTION
-                                ? params->t_kClearInj
-                                : params->t_kClear;
+        const double t_k3 =
+            (event->route == HRTCORE_ROUTE_INJECTION ? params->t_kClearInj
+                                                     : params->t_kClear) *
+            age_clearance_multiplier(true, birth_year, event->time_h);
         if (event->route == HRTCORE_ROUTE_INJECTION) {
             if (event->ester == HRTCORE_ESTER_T) {
                 zero_params(&out, t_k3);
@@ -848,7 +872,7 @@ static double interpolate_series(const hrtcore_pk_result *result, const double *
 }
 
 int hrtcore_pk_run(const hrtcore_dose_event *events, size_t count, double weight_kg,
-                   const hrtcore_pk_params *params, double now_h,
+                   const hrtcore_pk_params *params, int32_t birth_year, double now_h,
                    hrtcore_pk_result *out, hrtcore_error *err) {
     if (out == NULL || params == NULL || (events == NULL && count != 0)) {
         set_error(err, HRTCORE_ERR_INVALID_ARG, "invalid PK argument");
@@ -944,7 +968,7 @@ int hrtcore_pk_run(const hrtcore_dose_event *events, size_t count, double weight
         }
         precomputed_t entry;
         entry.event_index = i;
-        entry.params = resolve_params(&sorted[i], params);
+        entry.params = resolve_params(&sorted[i], params, birth_year);
         entry.wear_h = resolve_patch_wear_h(&sorted[i], i, removal_times);
         entry.max_lifetime_h =
             compute_max_lifetime_h(&entry.params, &sorted[i], entry.wear_h);

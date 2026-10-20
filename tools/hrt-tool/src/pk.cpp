@@ -187,7 +187,8 @@ PkResult::~PkResult() {
 }
 
 std::optional<PkResult> run_pk(const std::vector<PkEvent> &events, double weight_kg,
-                               const hrtcore_pk_params &params, double now_h) {
+                               const hrtcore_pk_params &params, double now_h,
+                               int birth_year) {
     std::vector<hrtcore_dose_event> converted;
     converted.reserve(events.size());
     for (const PkEvent &event : events) {
@@ -208,7 +209,9 @@ std::optional<PkResult> run_pk(const std::vector<PkEvent> &events, double weight
     hrtcore_pk_result result{};
     hrtcore_error error{};
     const int status = hrtcore_pk_run(converted.data(), converted.size(), weight_kg,
-                                      &params, now_h, &result, &error);
+                                      &params,
+                                      birth_year < 1900 ? 0 : birth_year, now_h,
+                                      &result, &error);
     if (status == HRTCORE_ERR_NO_DATA) {
         return std::nullopt;
     }

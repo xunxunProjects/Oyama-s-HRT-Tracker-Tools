@@ -115,6 +115,79 @@ int main() {
 
     CHECK_EQ(scenarios_run, vectors.at("vectors").size());
 
+    // Age clearance adjustment, frozen from logic.ts at the same nowH. The
+    // vectors carry a birth year and full-precision samples, so this pins the
+    // slope, the 19..75 clamp, and the per-dose evaluation time.
+    {
+        std::ifstream age_input(std::string(HRT_TOOL_TESTDATA_DIR) +
+                                "/pk-age-vectors.json");
+        if (!age_input) {
+            std::cerr << "cannot open pk-age-vectors.json in "
+                      << HRT_TOOL_TESTDATA_DIR << "\n";
+            ++g_failures;
+        } else {
+            nlohmann::json age_vectors;
+            age_input >> age_vectors;
+            size_t age_scenarios = 0;
+            for (const nlohmann::json &scenario : age_vectors.at("vectors")) {
+                const std::string name =
+                    scenario.at("name").get<std::string>();
+                const double now_h =
+                    scenario.value("nowH", age_vectors.at("nowH").get<double>());
+                const double weight = scenario.at("weight").get<double>();
+                const int birth_year =
+                    scenario.at("birthYear").get<int>();
+
+                std::vector<PkEvent> events;
+                for (const nlohmann::json &event : scenario.at("events")) {
+                    events.push_back(pk_event_from_json(event));
+                }
+                std::optional<PkResult> result;
+                try {
+                    result = run_pk(events, weight, default_pk_params(), now_h,
+                                    birth_year);
+                } catch (const ToolError &error) {
+                    std::cerr << name << ": run_pk threw: " << error.what()
+                              << "\n";
+                    ++g_failures;
+                    continue;
+                }
+                if (!result.has_value()) {
+                    std::cerr << name << ": run_pk returned no result\n";
+                    ++g_failures;
+                    continue;
+                }
+                ++age_scenarios;
+
+                check_close(name + ".auc", result->raw().auc,
+                            scenario.at("auc").get<double>());
+                double auc_t = 0.0;
+                for (size_t i = 1; i < result->raw().length; ++i) {
+                    auc_t += 0.5 *
+                             (result->raw().t[i] + result->raw().t[i - 1]) *
+                             (result->raw().time_h[i] -
+                              result->raw().time_h[i - 1]);
+                }
+                check_close(name + ".aucT", auc_t,
+                            scenario.at("aucT").get<double>());
+
+                for (const nlohmann::json &sample :
+                     scenario.at("samples")) {
+                    const double hour = sample.at("timeH").get<double>();
+                    const PkSample actual = interpolate(*result, hour);
+                    const std::string at = "@" + std::to_string(hour);
+                    check_close(name + ".e2" + at, actual.e2,
+                                sample.at("e2").get<double>());
+                    check_close(name + ".cpa" + at, actual.cpa,
+                                sample.at("cpa").get<double>());
+                    check_close(name + ".t" + at, actual.t,
+                                sample.at("t").get<double>());
+                }
+            }
+            CHECK_EQ(age_scenarios, age_vectors.at("vectors").size());
+        }
+    }
+
     // The C ABI rejects non-finite and out-of-range inputs instead of
     // producing NaN concentrations or absurd doses.
     {
