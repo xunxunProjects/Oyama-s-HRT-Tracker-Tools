@@ -244,6 +244,6 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
         return static_cast<int>(ExitCode::Data);
     } catch (const std::exception &error) {
         err << "hrt-tool: " << error.what() << "\n";
-        return 1;
+        return static_cast<int>(ExitCode::Internal);
     }
 }

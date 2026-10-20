@@ -42,6 +42,7 @@ add_library(hrtcpp STATIC
     src/commands.cpp
     src/encrypted_file.cpp
     src/entropy.cpp
+    src/exit_codes.cpp
     src/file_io.cpp
     src/http.cpp
     src/hrt_client.cpp
@@ -86,6 +87,10 @@ if(BUILD_TESTING)
     target_link_libraries(version_test PRIVATE hrtcpp)
     add_dependencies(version_test hrtprint_build)
     add_test(NAME version COMMAND version_test)
+
+    add_executable(exit_code_test tests/exit_code_test.cpp)
+    target_link_libraries(exit_code_test PRIVATE hrtcpp)
+    add_test(NAME exit_code COMMAND exit_code_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

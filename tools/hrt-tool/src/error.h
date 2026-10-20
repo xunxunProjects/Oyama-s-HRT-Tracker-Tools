@@ -6,12 +6,24 @@
 
 enum class ExitCode : int {
     Ok = 0,
+    Internal = 1,
     Usage = 2,
     Vault = 3,
     Network = 4,
     Data = 5,
     NotImplemented = 6,
+    Auth = 7,
+    Trust = 8,
+    Permission = 9,
+    Conflict = 10,
+    Cancelled = 11,
+    Config = 12,
+    F2F = 13,
+    Platform = 14,
 };
+
+const char *exit_code_name(ExitCode code);
+const char *exit_code_description(ExitCode code);
 
 class ToolError : public std::runtime_error {
 public:
