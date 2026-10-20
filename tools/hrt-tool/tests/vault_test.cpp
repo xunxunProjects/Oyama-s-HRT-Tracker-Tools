@@ -96,7 +96,7 @@ int main() {
 #endif
 
         VaultSession unlocked = Vault::unlock(vault_path, kPassword);
-        CHECK(unlocked.data.version == 1);
+        CHECK(unlocked.data.version == 2);
         CHECK(unlocked.data.server == "https://hrt.mahiro.uk");
         CHECK(unlocked.data.created_at > 0);
         CHECK(!all_zero(unlocked.key));

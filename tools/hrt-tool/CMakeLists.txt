@@ -100,6 +100,10 @@ if(BUILD_TESTING)
     target_link_libraries(parse_args_test PRIVATE hrtcpp)
     add_test(NAME parse_args COMMAND parse_args_test)
 
+    add_executable(vault_links_test tests/vault_links_test.cpp)
+    target_link_libraries(vault_links_test PRIVATE hrtcpp)
+    add_test(NAME vault_links COMMAND vault_links_test)
+
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)

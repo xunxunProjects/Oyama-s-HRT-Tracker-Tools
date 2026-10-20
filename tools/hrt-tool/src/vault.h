@@ -5,11 +5,35 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <string>
 
+struct LinkData {
+    std::string url;
+    std::string proxy;
+    std::string mode;
+    std::string token;
+    std::string user_id;
+    std::string username;
+    std::string device_pass;
+    std::string cloud_key;
+    std::string device_key_pem;
+    std::string device_cert_pem;
+    std::string device_fingerprint;
+    int64_t last_login_failed_at = 0;
+};
+
 struct VaultData {
-    int version = 1;
+    int version = 2;
+    std::string language = "en";
+    std::string welcome;
+    bool humor = true;
+    std::string active_link = "";
+    std::map<std::string, LinkData> links;
+    /* Active-link view, kept as top-level fields so existing command code
+       does not need a link lookup for every read. */
+    std::string mode;
     std::string token;
     std::string user_id;
     std::string username;
@@ -29,6 +53,10 @@ struct VaultData {
     int64_t created_at = 0;
     int64_t updated_at = 0;
 };
+
+/* Exposed for migration tests: serialise/parse the plaintext payload. */
+nlohmann::json vault_data_to_json(const VaultData &data);
+VaultData vault_data_from_json(const nlohmann::json &value);
 
 class VaultSession {
 public:
