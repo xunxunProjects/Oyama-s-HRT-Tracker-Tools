@@ -92,6 +92,11 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
             } else if (name == "--trust-server") {
                 boolean_flag();
                 parsed.options.trust_server = true;
+            } else if (name == "--require-hrt") {
+                boolean_flag();
+                parsed.options.require_hrt = true;
+            } else if (name == "--device-name") {
+                parsed.options.device_name = take_value();
             } else if (name == "--insecure-tls") {
                 boolean_flag();
                 parsed.options.insecure_tls = true;
@@ -194,6 +199,7 @@ void print_help(std::ostream &out) {
         << "Global flags:\n"
         << "  --server URL  --proxy URL  --config-dir DIR  --debug  --trace\n"
         << "  --json  --no-color  --yes  --timeout SECONDS  --trust-server\n"
+        << "  --require-hrt  --device-name NAME\n"
         << "  --insecure-tls  --transport auto|tls|openssl-v1\n"
         << "  --no-cache-cloud-key  --compute local|server\n"
         << "  --vault-password-file FILE  --vault-password-stdin  --log-file FILE\n"
@@ -201,6 +207,8 @@ void print_help(std::ostream &out) {
         << "  --user-id ID  --account-password-file FILE  --account-password-stdin\n\n"
         << "Command flags:\n"
         << "  login --username USER  (a failed credential attempt pauses login 60s)\n"
+        << "        hrt:// login: the CLI shows a 128-hex code; approve it in the\n"
+        << "        web account page, then type the local account password.\n"
         << "  snapshot pull --out FILE [--id ID] [--force]\n"
         << "  snapshot push --in FILE\n"
         << "  look --all  --at OFFSETS  --labs N  --json\n\n"

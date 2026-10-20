@@ -131,7 +131,7 @@ CLI                         raw server                    web app / web user
  |-- pair.poll --------------------->|                          |
  |                                   |-- status --------------->|
  |<-- approved, token, user id ------|                          |
- |   (server signs device cert)      |                          |
+ |   (cert fingerprint registered)   |                          |
  |-- later: mTLS + request frames -->|-- HTTP /api/tool/v1/* -->|
 ```
 
@@ -302,19 +302,24 @@ fingerprints out of band.
 
 ## 11. Deployment and compatibility
 
-- `HRT_RAW_ENABLED=0` by default. Enabling requires the raw server, server
-  certificate, device CA, and a service token; the web capability and the
-  raw server must agree.
+- `HRT_RAW_ENABLED=0` by default. Enabling requires the raw server, its
+  server certificate/key, and a service token; the web capability and the
+  raw server must agree. Client certificates are self-signed per device and
+  registered by SHA-256 fingerprint at pairing; there is no device CA.
 - Docker runs the web app and raw server as separate processes on one
   volume; expose only the raw TLS port and the web port as intended.
 - `hrt://` is unavailable on Cloudflare Workers/Pages, Vercel Edge, Netlify
   Edge, Deno Deploy, Lambda@Edge, Fastly Compute@Edge, and static hosting.
-  Those deployments advertise unsupported and use the warned HTTPS fallback.
-- HTTPS fallback warning (print every run):
+  Those deployments keep the HTTPS API; the CLI warns on every HTTPS login
+  that the transport terminates at the server or its CDN.
+- HTTPS fallback is the legacy password login, not web-approval pairing. The
+  warning (printed every HTTPS login) is:
 
-> hrt transport unavailable; using HTTPS. HTTPS protects the link to the
-> server, but the server or its TLS-terminating CDN can read request bodies.
-> Absolute encryption security is not guaranteed.
+> warning: HTTPS terminates at the server (and any CDN in front of it); this
+> transport is not end-to-end encrypted. Use an hrt:// server when the
+> deployment offers one.
+
+  `hrt-tool login --require-hrt` refuses any non-`hrt://` server.
 
 ## 12. Test checklist
 

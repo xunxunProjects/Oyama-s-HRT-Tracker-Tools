@@ -40,6 +40,9 @@ struct HttpOptions {
     /* Hex SPKI SHA-256. When set, libcurl refuses the TLS handshake unless the
        server key matches, before any request body is sent. */
     std::string pinned_spki_sha256;
+    /* Device identity for the hrt:// raw transport. Empty for HTTPS. */
+    std::string hrt_device_cert_pem;
+    std::string hrt_device_key_pem;
     bool debug = false;
     bool trace = false;
     long timeout_s = 30;

@@ -8,6 +8,8 @@
 struct GlobalOptions {
     std::string server = "https://hrt.mahiro.uk";
     bool server_explicit = false;
+    bool require_hrt = false;
+    std::string device_name;
     std::string proxy;
     bool proxy_explicit = false;
     std::string config_dir;

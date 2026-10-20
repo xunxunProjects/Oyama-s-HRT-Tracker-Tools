@@ -199,6 +199,9 @@ nlohmann::json to_json(const VaultData &data) {
         {"server", data.server},
         {"proxy", data.proxy},
         {"trust", data.trust},
+        {"device_key_pem", data.device_key_pem},
+        {"device_cert_pem", data.device_cert_pem},
+        {"device_fingerprint", data.device_fingerprint},
         {"opsec_ack", data.opsec_ack},
         {"last_login_failed_at", data.last_login_failed_at},
         {"created_at", data.created_at},
@@ -227,6 +230,9 @@ VaultData from_json(const nlohmann::json &value) {
     } else {
         data.trust = nlohmann::json::object();
     }
+    data.device_key_pem = value.value("device_key_pem", std::string{});
+    data.device_cert_pem = value.value("device_cert_pem", std::string{});
+    data.device_fingerprint = value.value("device_fingerprint", std::string{});
     data.opsec_ack = value.value("opsec_ack", false);
     data.last_login_failed_at =
         value.value("last_login_failed_at", static_cast<int64_t>(0));

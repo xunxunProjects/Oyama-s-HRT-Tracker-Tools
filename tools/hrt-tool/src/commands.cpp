@@ -5,6 +5,8 @@
 #include "encrypted_file.h"
 #include "entropy.h"
 #include "error.h"
+#include "hrt_client.h"
+#include "hrt_pairing.h"
 #include "local_commands.h"
 #include "log.h"
 #include "model.h"
@@ -28,6 +30,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -157,6 +160,8 @@ HttpOptions http_options_for(const ParsedArgs &parsed, const VaultData &data,
     http.timeout_s = parsed.options.timeout_s;
     http.insecure_tls = parsed.options.insecure_tls;
     http.trace_out = &err;
+    http.hrt_device_cert_pem = data.device_cert_pem;
+    http.hrt_device_key_pem = data.device_key_pem;
     return http;
 }
 
@@ -173,7 +178,8 @@ std::string normalized_origin(const std::string &url) {
     const Url parsed = parse_url(url);
     std::string port = parsed.port;
     if (port.empty()) {
-        port = lower_ascii(parsed.scheme) == "https" ? "443" : "80";
+        const std::string scheme = lower_ascii(parsed.scheme);
+        port = scheme == "https" ? "443" : scheme == "hrt" ? "9443" : "80";
     }
     return lower_ascii(parsed.scheme) + "://" + lower_ascii(parsed.host) + ":" +
            port;
@@ -295,9 +301,130 @@ void validate_hidden_service_host(const Url &url) {
     }
 }
 
+std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
+                             std::istream &in, std::ostream &err,
+                             const std::string &server) {
+    const Url parsed_url = parse_url(server);
+    if (parsed_url.scheme != "hrt") {
+        throw ToolError(ExitCode::Usage, "HRT_URL", "server must use hrt://");
+    }
+    validate_hidden_service_host(parsed_url);
+    const bool onion = is_onion_host(parsed_url.host);
+    const bool i2p = is_i2p_host(parsed_url.host);
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    if (onion || i2p) {
+        const std::string network = onion ? "Tor" : "I2P";
+        const std::string suggested = suggested_proxy_for_host(parsed_url.host);
+        if (http.proxy.empty()) {
+            throw ToolError(ExitCode::Network,
+                            onion ? "TOR_PROXY_MISSING" : "I2P_PROXY_MISSING",
+                            std::string("this is a ") + network + " address but no " +
+                                network + " proxy is configured. Run: hrt-tool "
+                                "config set proxy " + suggested);
+        }
+        if (lower_ascii(parse_url(http.proxy).scheme) != "socks5h") {
+            throw ToolError(ExitCode::Usage, "PROXY_DNS",
+                            std::string("hidden-service traffic must use a socks5h:// "
+                                        "proxy. Run: hrt-tool config set proxy ") +
+                                suggested);
+        }
+    }
+
+    HrtClientOptions options;
+    options.proxy = http.proxy;
+    options.timeout_s = parsed.options.timeout_s;
+    HrtClient probe(server, options);
+    const HrtServerCertificate certificate = probe.connect();
+    probe.close();
+    const std::string pin = certificate.spki_sha256;
+    if (pin.empty()) {
+        throw ToolError(ExitCode::Network, "TRUST_NO_PIN",
+                        "could not compute the raw server public-key pin");
+    }
+
+    const std::string origin = normalized_origin(server);
+    TrustStore store(unlocked.session.data.trust);
+    const TrustState state = store.check(origin, pin);
+    if (parsed.options.insecure_tls) {
+        err << "warning: --insecure-tls does not apply to hrt://; the pinned "
+               "public key is the trust anchor\n";
+    }
+    if (state == TrustState::Trusted) {
+        return pin;
+    }
+    if (state == TrustState::Changed) {
+        err << "warning: the pinned key for " << origin
+            << " changed. This can mean a machine-in-the-middle or a server key "
+               "rotation.\n";
+        if (!parsed.options.trust_server) {
+            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+                            "refusing the changed key; re-trust explicitly with "
+                            "--trust-server");
+        }
+    } else {
+        err << "first contact with " << origin << "\n";
+        err << "  transport: TLS 1.3 (hrt/1), pinned public key; no public CA\n";
+        err << "  certificate subject: "
+            << (certificate.subject.empty() ? "(unavailable)" : certificate.subject)
+            << "\n";
+        err << "  issuer: "
+            << (certificate.issuer.empty() ? "(unavailable)" : certificate.issuer)
+            << "\n";
+        err << "  valid: " << certificate.not_before << " .. "
+            << certificate.not_after << "\n";
+        err << "  SPKI SHA-256: " << pin << "\n";
+        if (onion) {
+            err << "warning: this is a Tor onion service. Verify the address and "
+                   "the key out of band before entering credentials.\n";
+        }
+        if (i2p) {
+            err << "warning: this is an I2P service. Verify the destination out "
+                   "of band before entering credentials.\n";
+        }
+    }
+
+    bool persist = false;
+    bool accepted = false;
+    if (parsed.options.trust_server) {
+        accepted = true;
+        persist = true;
+    } else if (parsed.options.yes) {
+        accepted = true;
+        err << "warning: trusting " << origin << " for this run only (--yes)\n";
+    } else {
+        err << "Trust this server? Type 'yes' to continue: ";
+        err.flush();
+        std::string answer;
+        if (!std::getline(in, answer)) {
+            throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+                            "server was not trusted");
+        }
+        if (!answer.empty() && answer.back() == '\r') {
+            answer.pop_back();
+        }
+        accepted = answer == "yes";
+        persist = accepted;
+    }
+    if (!accepted) {
+        throw ToolError(ExitCode::Network, "TRUST_REFUSED",
+                        "server was not trusted");
+    }
+    if (persist) {
+        store.trust(origin, pin);
+        unlocked.session.data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        err << "trusted and pinned " << origin << "\n";
+    }
+    return pin;
+}
+
 std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
                          std::istream &in, std::ostream &err,
                          const std::string &server) {
+    if (is_hrt_url(server)) {
+        return ensure_hrt_trust(unlocked, parsed, in, err, server);
+    }
     const Url parsed_url = parse_url(server);
     validate_server_url(parsed_url);
     validate_hidden_service_host(parsed_url);
@@ -519,12 +646,166 @@ int command_version(const ParsedArgs &parsed, std::ostream &out) {
     return 0;
 }
 
+std::string pairing_device_label(const ParsedArgs &parsed) {
+    std::string name = parsed.options.device_name;
+    if (name.empty()) {
+        name = "hrt-tool";
+    }
+    const bool valid =
+        name.size() <= 64 &&
+        std::none_of(name.begin(), name.end(), [](unsigned char c) {
+            return c < 0x20 || c == 0x7f;
+        });
+    if (!valid) {
+        throw ToolError(ExitCode::Usage, "DEVICE_NAME",
+                        "the device name must be 1-64 printable characters");
+    }
+    return name;
+}
+
+int login_hrt(UnlockedVault &unlocked, const ParsedArgs &parsed,
+              const std::string &username, const std::string &server,
+              std::istream &in, std::ostream &out, std::ostream &err) {
+    const bool server_changed =
+        !unlocked.session.data.server.empty() &&
+        !same_origin(server, unlocked.session.data.server);
+    if (server_changed) {
+        unlocked.session.data.token.clear();
+        unlocked.session.data.cloud_key.clear();
+        unlocked.session.data.device_pass.clear();
+        unlocked.session.data.device_key_pem.clear();
+        unlocked.session.data.device_cert_pem.clear();
+        unlocked.session.data.device_fingerprint.clear();
+    }
+
+    const std::string device_name = pairing_device_label(parsed);
+    HrtDeviceIdentity identity;
+    if (!unlocked.session.data.device_key_pem.empty() &&
+        !unlocked.session.data.device_cert_pem.empty() &&
+        !unlocked.session.data.device_fingerprint.empty()) {
+        identity.private_key_pem = unlocked.session.data.device_key_pem;
+        identity.certificate_pem = unlocked.session.data.device_cert_pem;
+        identity.fingerprint = unlocked.session.data.device_fingerprint;
+    } else {
+        identity = generate_hrt_device_identity(device_name);
+        unlocked.session.data.device_key_pem = identity.private_key_pem;
+        unlocked.session.data.device_cert_pem = identity.certificate_pem;
+        unlocked.session.data.device_fingerprint = identity.fingerprint;
+        unlocked.session.data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    }
+
+    /* Trust is decided before the pairing code is shown or sent. */
+    const std::string trusted_pin =
+        ensure_trust(unlocked, parsed, in, err, server);
+
+    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HrtClientOptions options;
+    options.proxy = http.proxy;
+    options.expected_spki = trusted_pin;
+    options.timeout_s = parsed.options.timeout_s;
+    HrtClient client(server, options);
+    client.connect();
+
+    const std::string code = generate_hrt_code();
+    const ToolVersion version = current_version();
+    const std::string client_version = std::to_string(version.major) + "." +
+                                       std::to_string(version.minor) + "." +
+                                       std::to_string(version.patch);
+    const HrtPairRequest request =
+        start_hrt_pairing(client, username, device_name, identity.certificate_pem,
+                          code, client_version);
+
+    std::ostream &code_out = parsed.options.json ? err : out;
+    code_out << "Verification code (128 hex):\n" << code << "\n";
+    code_out << "Approve this device at:\n  " << request.verification_url << "\n";
+    code_out << "Waiting for web approval...\n";
+    code_out.flush();
+
+    const auto now_seconds = [] {
+        return std::chrono::duration_cast<std::chrono::seconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    };
+    HrtPairResult result;
+    while (true) {
+        result = poll_hrt_pairing(client, request);
+        if (result.status == HrtPairStatus::Approved) {
+            break;
+        }
+        if (result.status == HrtPairStatus::Denied) {
+            client.close();
+            save_login_failure(unlocked, parsed);
+            throw ApiAuthError("PAIR_DENIED", "the login request was denied in the web app");
+        }
+        if (result.status == HrtPairStatus::Expired ||
+            now_seconds() >= request.expires_at) {
+            client.close();
+            save_login_failure(unlocked, parsed);
+            throw ApiAuthError("PAIR_EXPIRED",
+                               "the login request expired; run hrt-tool login again");
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    client.close();
+
+    /* The account password never goes to the server; it only derives the
+       local cloud-data key. */
+    const std::string password = read_account_password(parsed.options, in, out);
+    const std::array<uint8_t, 32> key = derive_cloud_key(password, result.user_id);
+
+    unlocked.session.data.last_login_failed_at = 0;
+    unlocked.session.data.token = result.token;
+    unlocked.session.data.user_id = result.user_id;
+    unlocked.session.data.username = result.username;
+    unlocked.session.data.device_pass.clear();
+    unlocked.session.data.cloud_key =
+        parsed.options.cache_cloud_key ? cloud_key_to_hex(key) : "";
+    unlocked.session.data.server = server;
+    if (!parsed.options.proxy.empty()) {
+        unlocked.session.data.proxy = parsed.options.proxy;
+    }
+    unlocked.session.data.opsec_ack = true;
+    unlocked.session.data.updated_at = now_ms();
+    const Paths paths = resolve_paths(parsed.options.config_dir);
+    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+
+    if (parsed.options.json) {
+        out << nlohmann::json{
+                   {"user",
+                    {{"id", result.user_id}, {"username", result.username}}},
+                   {"transport", "hrt/1"},
+                   {"device",
+                    {{"fingerprint", identity.fingerprint},
+                     {"name", device_name}}}}
+                   .dump(2)
+            << "\n";
+    } else {
+        out << "logged in as " << result.username << " (" << result.user_id
+            << ") via hrt/1\n";
+        out << "device: " << device_name << " [" << identity.fingerprint << "]\n";
+    }
+    return 0;
+}
+
 int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                   std::ostream &err) {
     UnlockedVault unlocked = unlock_full(parsed.options, in, out);
     enforce_login_cooldown(unlocked.session.data);
-    const std::string username = read_username(parsed, in, out);
     const std::string server = server_for(parsed, unlocked.session.data);
+    if (parsed.options.require_hrt && !is_hrt_url(server)) {
+        throw ToolError(ExitCode::Usage, "HRT_REQUIRED",
+                        "--require-hrt was given but the server is not hrt://; "
+                        "run hrt-tool config set server hrt://HOST[:PORT]");
+    }
+    const std::string username = read_username(parsed, in, out);
+    if (is_hrt_url(server)) {
+        return login_hrt(unlocked, parsed, username, server, in, out, err);
+    }
+    err << "warning: HTTPS terminates at the server (and any CDN in front of "
+           "it); this transport is not end-to-end encrypted. Use an hrt:// "
+           "server when the deployment offers one.\n";
     /* Decide trust before the account password is typed or sent. */
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
@@ -643,6 +924,10 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         out << "{\"ok\":true}\n";
     } else {
         out << (had_token ? "logged out\n" : "local credentials cleared\n");
+        if (!unlocked.session.data.device_cert_pem.empty()) {
+            out << "the per-install device identity was kept; the next hrt:// "
+                   "login still needs web approval\n";
+        }
     }
     if (!warning.empty()) {
         err << "warning: session revocation failed (" << warning
@@ -941,7 +1226,8 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
                 << "\n";
         }
         if (key.empty() || key == "transport") {
-            out << "transport: tls\n";
+            const bool raw = is_hrt_url(unlocked.session.data.server);
+            out << "transport: " << (raw ? "hrt/1" : "tls") << "\n";
         }
         if (key.empty() || key == "compute") {
             out << "compute: local\n";
@@ -977,21 +1263,34 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             const std::string next =
                 sub == "unset" ? "https://hrt.mahiro.uk" : value;
             const Url next_url = parse_url(next);
-            validate_server_url(next_url);
-            validate_hidden_service_host(next_url);
+            if (next_url.scheme == "hrt") {
+                if (!next_url.path.empty() && next_url.path != "/") {
+                    throw ToolError(ExitCode::Usage, "HRT_URL",
+                                    "an hrt:// server URL has no path");
+                }
+                validate_hidden_service_host(next_url);
+            } else {
+                validate_server_url(next_url);
+                validate_hidden_service_host(next_url);
+            }
             if (!unlocked.session.data.server.empty() &&
                 !same_origin(next, unlocked.session.data.server)) {
                 unlocked.session.data.token.clear();
                 unlocked.session.data.cloud_key.clear();
                 unlocked.session.data.device_pass.clear();
-                err << "warning: server changed; the saved session was cleared\n";
+                unlocked.session.data.device_key_pem.clear();
+                unlocked.session.data.device_cert_pem.clear();
+                unlocked.session.data.device_fingerprint.clear();
+                err << "warning: server changed; the saved session and device "
+                       "identity were cleared\n";
             }
             unlocked.session.data.server = next;
             out << "server set: " << next << "\n";
         } else if (key == "transport") {
-            throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
-                            "the encrypted transport envelope is not "
-                            "implemented; plain HTTPS/TLS is used");
+            throw ToolError(ExitCode::Usage, "TRANSPORT_SELECTION",
+                            "the transport follows the server URL: use "
+                            "config set server hrt://HOST[:PORT] for hrt/1, "
+                            "or an https:// URL for TLS");
         } else if (key == "compute") {
             throw ToolError(ExitCode::NotImplemented, "NOT_IMPLEMENTED",
                             "server compute is reserved; computation is local");

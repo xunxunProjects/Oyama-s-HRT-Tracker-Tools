@@ -18,6 +18,11 @@ struct VaultData {
     std::string server = "https://hrt.mahiro.uk";
     std::string proxy;
     nlohmann::json trust = nlohmann::json::object();
+    /* hrt:// device identity. The private key is only ever written to the
+       encrypted vault; the certificate and fingerprint are public. */
+    std::string device_key_pem;
+    std::string device_cert_pem;
+    std::string device_fingerprint;
     bool opsec_ack = false;
     /* Milliseconds since the epoch; 0 means no recent failed login. */
     int64_t last_login_failed_at = 0;

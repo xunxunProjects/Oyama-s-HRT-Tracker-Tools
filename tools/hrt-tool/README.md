@@ -69,7 +69,7 @@ command-line arguments are never used for secrets.
 | `init [--reset]`, `config get\|set\|unset\|path`, `logs show --log-file FILE` | Implemented. |
 | `look` | Implemented; without `--snapshot` it pulls and decrypts the newest revision, otherwise it reads the file. |
 | `add`, `dose`, `lab`, `weight`, `export`, `import` | Implemented against a local `--snapshot`. |
-| `login`, `logout`, `whoami` | Implemented against `/api/tool/v1`, with first-contact SPKI trust prompts. |
+| `login`, `logout`, `whoami` | Implemented over HTTPS and `hrt://`. `hrt://` uses web-approval pairing and a per-install device certificate; both transports pin the server key on first contact. |
 | `snapshot pull`, `snapshot push`, `snapshot list` | Implemented; pull writes an encrypted local snapshot, push merges and retries on `409`. |
 | `logs <other>` | Stub; exit `6`. |
 
@@ -172,17 +172,46 @@ origin's token and device pass). `--no-cache-cloud-key` keeps the derived key ou
 of the vault on that command; pass it to every command that may derive the key,
 or the first `pull`/`look` will cache it.
 
+### `hrt://` web-approval login
+
+An `hrt://` login does not send the account password anywhere:
+
+```sh
+hrt-tool config set server hrt://hrt.example.org:9443
+hrt-tool login --username alice
+```
+
+The CLI prints a 128-hex verification code and a web URL, then polls while
+the account owner opens **Account → Security**, checks the server-observed
+IP/country and device fingerprint, and enters the code. Only the code's
+SHA-256 is sent. After approval the CLI asks for the local account password,
+which derives the cloud-data key and never leaves the machine. The request
+expires after five minutes; a denied or expired request starts the same
+hardcoded 60-second login pause as a wrong password.
+
+The first `hrt://` login generates a random device key pair and self-signed
+certificate in the encrypted vault. Every later raw command authenticates
+with that certificate, and the web app binds the issued token to its
+fingerprint. `logout` revokes the token but keeps this per-install identity,
+so the next approval reuses the same device instead of consuming a new
+device slot; revoke the device itself under **Account → Security** when it
+should stop working. Use `--device-name NAME` to choose the label shown in
+the web approval page.
+
+`--require-hrt` refuses to fall back to HTTPS during login. Without it, an
+HTTPS server still uses the legacy password flow and prints a warning that
+HTTPS terminates at the server or its CDN, so the transport is not
+end-to-end encrypted.
+
 ### `hrt://` transport availability
 
 The self-hosted `hrt://` transport needs a server that can expose a raw
 TLS/TCP listener and accept client certificates. It is **not available** on
 edge/serverless platforms that only expose HTTP(S), including Cloudflare
 Workers and Pages, Vercel Edge Functions, Netlify Edge Functions, Deno
-Deploy, AWS Lambda@Edge, and Fastly Compute@Edge. Those deployments
-advertise `hrt` as unsupported; the client refuses `hrt://` there and may
-use the warned HTTPS fallback described in
-[`docs/PRIVACY_ENVIRONMENTS.md`](docs/PRIVACY_ENVIRONMENTS.md#https-fallback).
-Cloudflare-hosted deployments keep the existing HTTPS API.
+Deploy, AWS Lambda@Edge, and Fastly Compute@Edge. Those deployments keep the
+HTTPS API, which the client warns about. Cloudflare-hosted deployments keep
+the existing HTTPS API.
 
 Supported hosts for `hrt://` and the HTTPS policy:
 

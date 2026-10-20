@@ -1,5 +1,6 @@
 #include "api.h"
 
+#include "hrt_client.h"
 #include "http.h"
 
 #include <algorithm>
@@ -330,5 +331,8 @@ std::pair<std::string, int64_t> parse_conflict_current(const nlohmann::json &bod
 std::unique_ptr<ApiClient> make_api_client(const std::string &server,
                                            const HttpOptions &http_options,
                                            const std::string &token) {
+    if (is_hrt_url(server)) {
+        return make_hrt_api_client(server, http_options, token);
+    }
     return std::make_unique<LiveApiClient>(server, http_options, token);
 }

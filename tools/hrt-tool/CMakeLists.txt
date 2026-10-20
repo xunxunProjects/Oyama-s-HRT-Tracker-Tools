@@ -44,7 +44,10 @@ add_library(hrtcpp STATIC
     src/entropy.cpp
     src/file_io.cpp
     src/http.cpp
+    src/hrt_client.cpp
+    src/hrt_pairing.cpp
     src/hrt_protocol.cpp
+    src/api_hrt.cpp
     src/local_commands.cpp
     src/log.cpp
     src/model.cpp
@@ -117,6 +120,26 @@ if(BUILD_TESTING)
     add_executable(hrt_protocol_test tests/hrt_protocol_test.cpp)
     target_link_libraries(hrt_protocol_test PRIVATE hrtcpp)
     add_test(NAME hrt_protocol COMMAND hrt_protocol_test)
+
+    add_executable(hrt_client_test tests/hrt_client_test.cpp)
+    target_link_libraries(hrt_client_test PRIVATE hrtcpp)
+    add_test(NAME hrt_client COMMAND hrt_client_test)
+
+    add_executable(hrt_client_network_test tests/hrt_client_network_test.cpp)
+    target_link_libraries(hrt_client_network_test PRIVATE hrtcpp Threads::Threads)
+    add_test(NAME hrt_client_network COMMAND hrt_client_network_test)
+
+    add_executable(hrt_pairing_test tests/hrt_pairing_test.cpp)
+    target_link_libraries(hrt_pairing_test PRIVATE hrtcpp Threads::Threads)
+    add_test(NAME hrt_pairing COMMAND hrt_pairing_test)
+
+    add_executable(hrt_api_test tests/hrt_api_test.cpp)
+    target_link_libraries(hrt_api_test PRIVATE hrtcpp Threads::Threads)
+    add_test(NAME hrt_api COMMAND hrt_api_test)
+
+    add_executable(hrt_login_test tests/hrt_login_test.cpp)
+    target_link_libraries(hrt_login_test PRIVATE hrtcpp Threads::Threads)
+    add_test(NAME hrt_login COMMAND hrt_login_test)
 
     add_executable(trust_test tests/trust_test.cpp)
     target_link_libraries(trust_test PRIVATE hrtcpp)

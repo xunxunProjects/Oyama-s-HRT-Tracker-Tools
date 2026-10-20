@@ -79,6 +79,9 @@ public:
 std::unique_ptr<ApiClient> make_api_client(const std::string &server,
                                            const HttpOptions &http_options,
                                            const std::string &token = "");
+std::unique_ptr<ApiClient> make_hrt_api_client(const std::string &server,
+                                               const HttpOptions &http_options,
+                                               const std::string &token = "");
 
 /* Pure response parsers, exposed for tests. */
 LoginResult parse_login_response(const nlohmann::json &body);

@@ -4,10 +4,11 @@ This page is for people running `hrt-tool` in Qubes, Whonix, Tails, or
 another disposable/compartmentalized environment. It explains what works,
 what is limited, and what the tool does **not** guarantee.
 
-**Status.** The `hrt://` pairing transport described here is being added to
-the tool and a self-hosted server. Current releases use HTTPS only. The
-platform guidance, the data-minimisation rules, and the fallback warning
-below apply as soon as `hrt://` is enabled.
+**Status.** The `hrt://` web-approval pairing transport is implemented in
+the CLI and in the self-hosted raw server. The raw server is **off by
+default** (`HRT_RAW_ENABLED=0`), so a deployment must enable it; until then
+the warned HTTPS password login below applies. Cloudflare/serverless hosting
+cannot enable the raw transport.
 
 ## Summary
 
@@ -21,12 +22,13 @@ below apply as soon as `hrt://` is enabled.
 - A disposable VM that does not keep the vault looks like a **new device**
   every time. The account owner must approve it on the web. Previous
   disposable devices expire automatically and can be revoked at any time.
-- The CLI tries the self-hosted `hrt://` transport first. If the server does
-  not support it, or the connection cannot be used, the CLI may fall back to
-  HTTPS and **says so on every run**. HTTPS is still encrypted in transit and
-  pinned to the server's public key, but it terminates at the server or CDN;
-  absolute encryption security is not guaranteed. See
-  [HTTPS fallback](#https-fallback).
+- The transport follows the configured server URL. Use `hrt://` for the
+  self-hosted raw transport. An `https://` server uses the legacy password
+  login and **prints a warning on every login**. HTTPS is still encrypted in
+  transit and pinned to the server's public key, but it terminates at the
+  server or CDN; absolute encryption security is not guaranteed. See
+  [HTTPS fallback](#https-fallback). Pass `--require-hrt` to refuse HTTPS
+  outright.
 - There is no server-sent email or SMS verification code. The code is
   generated locally by the CLI and entered on the web, so there is no
   email/SMS code stream to spam.
@@ -147,24 +149,29 @@ is collected.
 
 ## HTTPS fallback
 
-The CLI prefers the self-hosted `hrt://` transport because it can keep the
-pairing and request channel away from a CDN that terminates TLS. If the
-transport is unavailable, the CLI may continue over HTTPS and prints, on
-every run:
+The self-hosted `hrt://` transport keeps the pairing and request channel
+away from a CDN that terminates TLS. If the deployment has no raw listener,
+an `https://` server uses the legacy password login, and the CLI prints on
+every login:
 
-> hrt transport unavailable; using HTTPS. HTTPS protects the link to the
-> server, but the server or its TLS-terminating CDN can read request bodies.
-> Absolute encryption security is not guaranteed.
+> warning: HTTPS terminates at the server (and any CDN in front of it); this
+> transport is not end-to-end encrypted. Use an hrt:// server when the
+> deployment offers one.
 
-The fallback does not send the account password. It still uses the pinned
-server key, the approved device token, and the locally derived cloud key.
-If you do not want a fallback, require the hrt transport explicitly (the
-flag is documented in the tool's `--help` once the transport ships).
+**The HTTPS fallback is the legacy password login.** It sends the account
+password to the server inside the TLS session, so the server and any
+TLS-terminating CDN can read it; absolute encryption security is not
+guaranteed. Web-approval pairing — where the password never leaves the
+machine — is implemented only for `hrt://`. The fallback still uses the
+pinned server key and the locally derived cloud key, and cloud payloads stay
+encrypted in the vault.
 
-Cloudflare-hosted deployments do not support `hrt://`. They advertise that
-capability as unavailable; the client refuses `hrt://` and uses the HTTPS
-fallback only after printing the warning. Self-hosted deployments can enable
-the transport.
+If you do not want a fallback, pass `--require-hrt` to `login`; it refuses
+any non-`hrt://` server.
+
+Cloudflare-hosted deployments do not support `hrt://`, so they necessarily
+use the warned HTTPS password login. Self-hosted deployments can enable the
+raw transport and get web-approval pairing.
 
 ## If something looks wrong
 
