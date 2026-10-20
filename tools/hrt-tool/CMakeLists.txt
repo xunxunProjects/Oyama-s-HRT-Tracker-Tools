@@ -57,6 +57,7 @@ add_library(hrtcpp STATIC
     src/paths.cpp
     src/pk.cpp
     src/prompt.cpp
+    src/session.cpp
     src/snapshot.cpp
     src/trust.cpp
     src/vault.cpp
@@ -113,6 +114,10 @@ if(BUILD_TESTING)
     add_executable(link_commands_test tests/link_commands_test.cpp)
     target_link_libraries(link_commands_test PRIVATE hrtcpp)
     add_test(NAME link_commands COMMAND link_commands_test)
+
+    add_executable(session_test tests/session_test.cpp)
+    target_link_libraries(session_test PRIVATE hrtcpp)
+    add_test(NAME session COMMAND session_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

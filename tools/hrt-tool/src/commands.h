@@ -45,7 +45,10 @@ struct ParsedArgs {
     bool help = false;
 };
 
-int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out, std::ostream &err);
+struct SessionContext;
+
+int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+             std::ostream &err, SessionContext *context = nullptr);
 
 std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                                 std::ostream &out, bool confirm);

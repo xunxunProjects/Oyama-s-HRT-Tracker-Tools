@@ -13,6 +13,7 @@
 #include "model.h"
 #include "paths.h"
 #include "prompt.h"
+#include "session.h"
 #include "snapshot.h"
 #include "trust.h"
 #include "vault.h"
@@ -27,7 +28,6 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <openssl/crypto.h>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -45,97 +45,6 @@ namespace {
 
 bool has_argument(const std::vector<std::string> &args, const std::string &value) {
     return std::find(args.begin(), args.end(), value) != args.end();
-}
-
-VaultSession unlock_required(const GlobalOptions &options, std::istream &in,
-                             std::ostream &out) {
-    const Paths paths = resolve_paths(options.config_dir);
-    if (!Vault::exists(paths.vault_file)) {
-        throw ToolError(ExitCode::Vault, "VAULT_MISSING",
-                        "vault not found; run hrt-tool init");
-    }
-    const std::string password = read_vault_password(options, in, out, false);
-    return Vault::unlock(paths.vault_file, password);
-}
-
-/* Serialises vault read-modify-write across processes, like SnapshotLock. */
-class VaultLock {
-public:
-    explicit VaultLock(const std::filesystem::path &vault) {
-#ifndef _WIN32
-        path_ = vault;
-        path_ += ".lock";
-        fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-        if (fd_ < 0) {
-            throw ToolError(ExitCode::Vault, "VAULT_LOCK",
-                            "cannot open the vault lock: " +
-                                std::string(std::strerror(errno)));
-        }
-        while (::flock(fd_, LOCK_EX) != 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            const std::string detail = std::strerror(errno);
-            ::close(fd_);
-            fd_ = -1;
-            throw ToolError(ExitCode::Vault, "VAULT_LOCK",
-                            "cannot lock the vault: " + detail);
-        }
-#else
-        (void)vault;
-#endif
-    }
-    ~VaultLock() {
-#ifndef _WIN32
-        if (fd_ >= 0) {
-            ::flock(fd_, LOCK_UN);
-            ::close(fd_);
-        }
-#endif
-    }
-    VaultLock(const VaultLock &) = delete;
-    VaultLock &operator=(const VaultLock &) = delete;
-
-private:
-#ifndef _WIN32
-    std::filesystem::path path_;
-    int fd_ = -1;
-#endif
-};
-
-struct UnlockedVault {
-    VaultSession session;
-    std::string master;
-    std::unique_ptr<VaultLock> lock;
-
-    UnlockedVault(VaultSession session_, std::string master_,
-                  std::unique_ptr<VaultLock> lock_)
-        : session(std::move(session_)),
-          master(std::move(master_)),
-          lock(std::move(lock_)) {}
-    UnlockedVault(UnlockedVault &&) noexcept = default;
-    UnlockedVault &operator=(UnlockedVault &&) noexcept = default;
-    UnlockedVault(const UnlockedVault &) = delete;
-    UnlockedVault &operator=(const UnlockedVault &) = delete;
-    ~UnlockedVault() {
-        if (!master.empty()) {
-            OPENSSL_cleanse(master.data(), master.size());
-        }
-    }
-};
-
-UnlockedVault unlock_full(const GlobalOptions &options, std::istream &in,
-                          std::ostream &out) {
-    const Paths paths = resolve_paths(options.config_dir);
-    if (!Vault::exists(paths.vault_file)) {
-        throw ToolError(ExitCode::Vault, "VAULT_MISSING",
-                        "vault not found; run hrt-tool init");
-    }
-    std::unique_ptr<VaultLock> lock =
-        std::make_unique<VaultLock>(paths.vault_file);
-    std::string master = read_vault_password(options, in, out, false);
-    VaultSession session = Vault::unlock(paths.vault_file, master);
-    return UnlockedVault{std::move(session), std::move(master), std::move(lock)};
 }
 
 std::string command_value(const std::vector<std::string> &args,
@@ -231,10 +140,10 @@ void enforce_login_cooldown(const VaultData &data) {
 }
 
 void save_login_failure(UnlockedVault &unlocked, const ParsedArgs &parsed) {
-    unlocked.session.data.last_login_failed_at = now_ms();
-    unlocked.session.data.updated_at = now_ms();
+    unlocked.session().data.last_login_failed_at = now_ms();
+    unlocked.session().data.updated_at = now_ms();
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
 }
 
 std::string format_iso(int64_t seconds) {
@@ -306,7 +215,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     validate_hidden_service_host(parsed_url);
     const bool onion = is_onion_host(parsed_url.host);
     const bool i2p = is_i2p_host(parsed_url.host);
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     if (onion || i2p) {
         const std::string network = onion ? "Tor" : "I2P";
         const std::string suggested = suggested_proxy_for_host(parsed_url.host);
@@ -338,7 +247,7 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     }
 
     const std::string origin = normalized_origin(server);
-    TrustStore store(unlocked.session.data.trust);
+    TrustStore store(unlocked.session().data.trust);
     const TrustState state = store.check(origin, pin);
     if (parsed.options.insecure_tls) {
         err << "warning: --insecure-tls does not apply to hrt://; the pinned "
@@ -406,9 +315,9 @@ std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     }
     if (persist) {
         store.trust(origin, pin);
-        unlocked.session.data.updated_at = now_ms();
+        unlocked.session().data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
         err << "trusted and pinned " << origin << "\n";
     }
     return pin;
@@ -426,7 +335,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     const bool onion = is_onion_host(parsed_url.host);
     const bool i2p = is_i2p_host(parsed_url.host);
 
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     if (onion || i2p) {
         /* Decide routing before any lookup: a .onion name must never reach the
            local resolver, and only socks5h keeps DNS at the proxy. */
@@ -487,7 +396,7 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
     }
     const std::string pin = tls ? response.spki_sha256 : "none";
     const std::string origin = normalized_origin(server);
-    TrustStore store(unlocked.session.data.trust);
+    TrustStore store(unlocked.session().data.trust);
     const TrustState state = store.check(origin, pin);
 
     if (parsed.options.insecure_tls && tls) {
@@ -575,9 +484,9 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
 
     if (persist) {
         store.trust(origin, pin);
-        unlocked.session.data.updated_at = now_ms();
+        unlocked.session().data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
         err << "trusted and pinned " << origin << "\n";
     }
     return tls ? pin : std::string{};
@@ -586,19 +495,19 @@ std::string ensure_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
 std::array<uint8_t, 32> cloud_key_for(UnlockedVault &unlocked,
                                      const ParsedArgs &parsed, std::istream &in,
                                      std::ostream &out) {
-    if (!unlocked.session.data.cloud_key.empty()) {
-        return cloud_key_from_hex(unlocked.session.data.cloud_key);
+    if (!unlocked.session().data.cloud_key.empty()) {
+        return cloud_key_from_hex(unlocked.session().data.cloud_key);
     }
-    if (unlocked.session.data.user_id.empty()) {
+    if (unlocked.session().data.user_id.empty()) {
         throw ApiAuthError("NO_USER", "the vault has no user id; log in again");
     }
     const std::string password = read_account_password(parsed.options, in, out);
     const std::array<uint8_t, 32> key =
-        derive_cloud_key(password, unlocked.session.data.user_id);
+        derive_cloud_key(password, unlocked.session().data.user_id);
     if (parsed.options.cache_cloud_key) {
-        unlocked.session.data.cloud_key = cloud_key_to_hex(key);
+        unlocked.session().data.cloud_key = cloud_key_to_hex(key);
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
     }
     return key;
 }
@@ -662,40 +571,40 @@ int login_hrt(UnlockedVault &unlocked, const ParsedArgs &parsed,
               const std::string &username, const std::string &server,
               std::istream &in, std::ostream &out, std::ostream &err) {
     const bool server_changed =
-        !unlocked.session.data.server.empty() &&
-        !same_origin(server, unlocked.session.data.server);
+        !unlocked.session().data.server.empty() &&
+        !same_origin(server, unlocked.session().data.server);
     if (server_changed) {
-        unlocked.session.data.token.clear();
-        unlocked.session.data.cloud_key.clear();
-        unlocked.session.data.device_pass.clear();
-        unlocked.session.data.device_key_pem.clear();
-        unlocked.session.data.device_cert_pem.clear();
-        unlocked.session.data.device_fingerprint.clear();
+        unlocked.session().data.token.clear();
+        unlocked.session().data.cloud_key.clear();
+        unlocked.session().data.device_pass.clear();
+        unlocked.session().data.device_key_pem.clear();
+        unlocked.session().data.device_cert_pem.clear();
+        unlocked.session().data.device_fingerprint.clear();
     }
 
     const std::string device_name = pairing_device_label(parsed);
     HrtDeviceIdentity identity;
-    if (!unlocked.session.data.device_key_pem.empty() &&
-        !unlocked.session.data.device_cert_pem.empty() &&
-        !unlocked.session.data.device_fingerprint.empty()) {
-        identity.private_key_pem = unlocked.session.data.device_key_pem;
-        identity.certificate_pem = unlocked.session.data.device_cert_pem;
-        identity.fingerprint = unlocked.session.data.device_fingerprint;
+    if (!unlocked.session().data.device_key_pem.empty() &&
+        !unlocked.session().data.device_cert_pem.empty() &&
+        !unlocked.session().data.device_fingerprint.empty()) {
+        identity.private_key_pem = unlocked.session().data.device_key_pem;
+        identity.certificate_pem = unlocked.session().data.device_cert_pem;
+        identity.fingerprint = unlocked.session().data.device_fingerprint;
     } else {
         identity = generate_hrt_device_identity(device_name);
-        unlocked.session.data.device_key_pem = identity.private_key_pem;
-        unlocked.session.data.device_cert_pem = identity.certificate_pem;
-        unlocked.session.data.device_fingerprint = identity.fingerprint;
-        unlocked.session.data.updated_at = now_ms();
+        unlocked.session().data.device_key_pem = identity.private_key_pem;
+        unlocked.session().data.device_cert_pem = identity.certificate_pem;
+        unlocked.session().data.device_fingerprint = identity.fingerprint;
+        unlocked.session().data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
     }
 
     /* Trust is decided before the pairing code is shown or sent. */
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
 
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     HrtClientOptions options;
     options.proxy = http.proxy;
     options.expected_spki = trusted_pin;
@@ -750,21 +659,21 @@ int login_hrt(UnlockedVault &unlocked, const ParsedArgs &parsed,
     const std::string password = read_account_password(parsed.options, in, out);
     const std::array<uint8_t, 32> key = derive_cloud_key(password, result.user_id);
 
-    unlocked.session.data.last_login_failed_at = 0;
-    unlocked.session.data.token = result.token;
-    unlocked.session.data.user_id = result.user_id;
-    unlocked.session.data.username = result.username;
-    unlocked.session.data.device_pass.clear();
-    unlocked.session.data.cloud_key =
+    unlocked.session().data.last_login_failed_at = 0;
+    unlocked.session().data.token = result.token;
+    unlocked.session().data.user_id = result.user_id;
+    unlocked.session().data.username = result.username;
+    unlocked.session().data.device_pass.clear();
+    unlocked.session().data.cloud_key =
         parsed.options.cache_cloud_key ? cloud_key_to_hex(key) : "";
-    unlocked.session.data.server = server;
+    unlocked.session().data.server = server;
     if (!parsed.options.proxy.empty()) {
-        unlocked.session.data.proxy = parsed.options.proxy;
+        unlocked.session().data.proxy = parsed.options.proxy;
     }
-    unlocked.session.data.opsec_ack = true;
-    unlocked.session.data.updated_at = now_ms();
+    unlocked.session().data.opsec_ack = true;
+    unlocked.session().data.updated_at = now_ms();
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
 
     if (parsed.options.json) {
         out << nlohmann::json{
@@ -785,10 +694,10 @@ int login_hrt(UnlockedVault &unlocked, const ParsedArgs &parsed,
 }
 
 int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                  std::ostream &err) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    enforce_login_cooldown(unlocked.session.data);
-    const std::string server = server_for(parsed, unlocked.session.data);
+                  std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    enforce_login_cooldown(unlocked.session().data);
+    const std::string server = server_for(parsed, unlocked.session().data);
     if (parsed.options.require_hrt && !is_hrt_url(server)) {
         throw ToolError(ExitCode::Usage, "HRT_REQUIRED",
                         "--require-hrt was given but the server is not hrt://; "
@@ -808,10 +717,10 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     /* A device pass is a credential for one server; never send a cached one
        to a different origin. */
     const std::string device_pass =
-        server == unlocked.session.data.server ? unlocked.session.data.device_pass
+        server == unlocked.session().data.server ? unlocked.session().data.device_pass
                                                : std::string{};
 
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client = make_api_client(server, http);
     LoginResult result;
@@ -838,30 +747,30 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         throw;
     }
 
-    unlocked.session.data.last_login_failed_at = 0;
+    unlocked.session().data.last_login_failed_at = 0;
     const std::array<uint8_t, 32> key =
         derive_cloud_key(password, result.user_id);
-    if (!unlocked.session.data.server.empty() &&
-        !same_origin(server, unlocked.session.data.server)) {
+    if (!unlocked.session().data.server.empty() &&
+        !same_origin(server, unlocked.session().data.server)) {
         /* Credentials belong to the old origin; never carry them over. */
-        unlocked.session.data.token.clear();
-        unlocked.session.data.cloud_key.clear();
-        unlocked.session.data.device_pass.clear();
+        unlocked.session().data.token.clear();
+        unlocked.session().data.cloud_key.clear();
+        unlocked.session().data.device_pass.clear();
     }
-    unlocked.session.data.token = result.token;
-    unlocked.session.data.user_id = result.user_id;
-    unlocked.session.data.username = result.username;
-    unlocked.session.data.device_pass = result.device_pass;
-    unlocked.session.data.cloud_key =
+    unlocked.session().data.token = result.token;
+    unlocked.session().data.user_id = result.user_id;
+    unlocked.session().data.username = result.username;
+    unlocked.session().data.device_pass = result.device_pass;
+    unlocked.session().data.cloud_key =
         parsed.options.cache_cloud_key ? cloud_key_to_hex(key) : "";
-    unlocked.session.data.server = server;
+    unlocked.session().data.server = server;
     if (!parsed.options.proxy.empty()) {
-        unlocked.session.data.proxy = parsed.options.proxy;
+        unlocked.session().data.proxy = parsed.options.proxy;
     }
-    unlocked.session.data.opsec_ack = true;
-    unlocked.session.data.updated_at = now_ms();
+    unlocked.session().data.opsec_ack = true;
+    unlocked.session().data.updated_at = now_ms();
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
 
     if (parsed.options.json) {
         out << nlohmann::json{{"user", {{"id", result.user_id},
@@ -876,12 +785,12 @@ int command_login(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
 }
 
 int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                   std::ostream &err) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    const bool had_token = !unlocked.session.data.token.empty();
+                   std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    const bool had_token = !unlocked.session().data.token.empty();
     const bool had_local =
-        had_token || !unlocked.session.data.cloud_key.empty() ||
-        !unlocked.session.data.device_pass.empty();
+        had_token || !unlocked.session().data.cloud_key.empty() ||
+        !unlocked.session().data.device_pass.empty();
     if (!had_local) {
         out << "not logged in\n";
         return 0;
@@ -889,17 +798,17 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
 
     std::string warning;
     if (had_token) {
-        const std::string saved = unlocked.session.data.server.empty()
+        const std::string saved = unlocked.session().data.server.empty()
                                       ? parsed.options.server
-                                      : unlocked.session.data.server;
+                                      : unlocked.session().data.server;
         try {
             const std::string trusted_pin =
                 ensure_trust(unlocked, parsed, in, err, saved);
             HttpOptions http =
-                http_options_for(parsed, unlocked.session.data, err);
+                http_options_for(parsed, unlocked.session().data, err);
             http.pinned_spki_sha256 = trusted_pin;
             std::unique_ptr<ApiClient> client =
-                make_api_client(saved, http, unlocked.session.data.token);
+                make_api_client(saved, http, unlocked.session().data.token);
             client->logout();
         } catch (const ToolError &error) {
             /* Revocation is best effort; local secrets are cleared either
@@ -909,17 +818,17 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         }
     }
 
-    unlocked.session.data.token.clear();
-    unlocked.session.data.cloud_key.clear();
-    unlocked.session.data.device_pass.clear();
-    unlocked.session.data.updated_at = now_ms();
+    unlocked.session().data.token.clear();
+    unlocked.session().data.cloud_key.clear();
+    unlocked.session().data.device_pass.clear();
+    unlocked.session().data.updated_at = now_ms();
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
     if (parsed.options.json) {
         out << "{\"ok\":true}\n";
     } else {
         out << (had_token ? "logged out\n" : "local credentials cleared\n");
-        if (!unlocked.session.data.device_cert_pem.empty()) {
+        if (!unlocked.session().data.device_cert_pem.empty()) {
             out << "the per-install device identity was kept; the next hrt:// "
                    "login still needs web approval\n";
         }
@@ -932,18 +841,18 @@ int command_logout(const ParsedArgs &parsed, std::istream &in, std::ostream &out
 }
 
 int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                   std::ostream &err) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    if (unlocked.session.data.token.empty()) {
+                   std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
-    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    const std::string server = authenticated_server(parsed, unlocked.session().data);
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
-        make_api_client(server, http, unlocked.session.data.token);
+        make_api_client(server, http, unlocked.session().data.token);
     const nlohmann::json me = client->me();
     if (parsed.options.json) {
         out << me.dump(2) << "\n";
@@ -958,18 +867,18 @@ int command_whoami(const ParsedArgs &parsed, std::istream &in, std::ostream &out
 }
 
 int command_look_remote(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                        std::ostream &err) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    if (unlocked.session.data.token.empty()) {
+                        std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
-    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    const std::string server = authenticated_server(parsed, unlocked.session().data);
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
-        make_api_client(server, http, unlocked.session.data.token);
+        make_api_client(server, http, unlocked.session().data.token);
     std::optional<Snapshot> snapshot = client->latest_snapshot();
     if (!snapshot.has_value()) {
         throw ToolError(ExitCode::Data, "NO_SNAPSHOT",
@@ -1062,18 +971,19 @@ PushResult push_sync_payload(ApiClient &client, const std::array<uint8_t, 32> &k
  * payload mutation the local commands use, and push it back through the
  * optimistic merge loop. Read-only subcommands just print the pulled data. */
 int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
-                          std::ostream &out, std::ostream &err) {
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    if (unlocked.session.data.token.empty()) {
+                          std::ostream &out, std::ostream &err,
+                          SessionContext *context) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
-    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    const std::string server = authenticated_server(parsed, unlocked.session().data);
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
-        make_api_client(server, http, unlocked.session.data.token);
+        make_api_client(server, http, unlocked.session().data.token);
 
     const std::array<uint8_t, 32> key =
         cloud_key_for(unlocked, parsed, in, out);
@@ -1115,23 +1025,23 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
 }
 
 int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                     std::ostream &err) {
+                     std::ostream &err, SessionContext *context) {
     if (parsed.command_args.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "snapshot needs pull, push, or list");
     }
     const std::string sub = parsed.command_args.front();
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    if (unlocked.session.data.token.empty()) {
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
-    const std::string server = authenticated_server(parsed, unlocked.session.data);
+    const std::string server = authenticated_server(parsed, unlocked.session().data);
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
-    HttpOptions http = http_options_for(parsed, unlocked.session.data, err);
+    HttpOptions http = http_options_for(parsed, unlocked.session().data, err);
     http.pinned_spki_sha256 = trusted_pin;
     std::unique_ptr<ApiClient> client =
-        make_api_client(server, http, unlocked.session.data.token);
+        make_api_client(server, http, unlocked.session().data.token);
 
     if (sub == "list") {
         const nlohmann::json list = client->list_snapshots();
@@ -1200,7 +1110,7 @@ int command_snapshot(const ParsedArgs &parsed, std::istream &in, std::ostream &o
         }
         const std::array<uint8_t, 32> key =
             cloud_key_for(unlocked, parsed, in, out);
-        nlohmann::json local = read_sync_input(in_path, unlocked.master, key);
+        nlohmann::json local = read_sync_input(in_path, unlocked.master(), key);
         if (local.is_object() && local.contains("format") &&
             local.at("format").is_string() &&
             local.at("format").get<std::string>() == "oyama-hrt-complete-backup") {
@@ -1273,57 +1183,57 @@ int command_init(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
 }
 
 int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                   std::ostream &err) {
+                   std::ostream &err, SessionContext *context) {
     if (parsed.command_args.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "config needs get, set, unset, or path");
     }
     const std::string sub = parsed.command_args.front();
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
 
     if (sub == "get") {
         const std::string key =
             parsed.command_args.size() > 1 ? parsed.command_args[1] : "";
         if (key.empty() || key == "server") {
-            out << "server: " << unlocked.session.data.server << "\n";
+            out << "server: " << unlocked.session().data.server << "\n";
         }
         if (key.empty() || key == "proxy") {
             out << "proxy: "
-                << (unlocked.session.data.proxy.empty() ? "(none)"
-                                                        : unlocked.session.data.proxy)
+                << (unlocked.session().data.proxy.empty() ? "(none)"
+                                                        : unlocked.session().data.proxy)
                 << "\n";
         }
         if (key.empty() || key == "transport") {
-            const bool raw = is_hrt_url(unlocked.session.data.server);
+            const bool raw = is_hrt_url(unlocked.session().data.server);
             out << "transport: " << (raw ? "hrt/1" : "tls") << "\n";
         }
         if (key.empty() || key == "compute") {
             out << "compute: local\n";
         }
         if (key.empty() || key == "language") {
-            out << "language: " << unlocked.session.data.language << "\n";
+            out << "language: " << unlocked.session().data.language << "\n";
         }
         if (key.empty() || key == "welcome") {
             out << "welcome: "
-                << (unlocked.session.data.welcome.empty()
+                << (unlocked.session().data.welcome.empty()
                         ? "(default)"
-                        : unlocked.session.data.welcome)
+                        : unlocked.session().data.welcome)
                 << "\n";
         }
         if (key.empty() || key == "humor") {
-            out << "humor: " << (unlocked.session.data.humor ? "on" : "off") << "\n";
+            out << "humor: " << (unlocked.session().data.humor ? "on" : "off") << "\n";
         }
         if (key.empty() || key == "mode") {
             out << "mode: "
-                << (unlocked.session.data.mode.empty() ? "(default)"
-                                                       : unlocked.session.data.mode)
+                << (unlocked.session().data.mode.empty() ? "(default)"
+                                                       : unlocked.session().data.mode)
                 << "\n";
         }
         if (key.empty() || key == "active-link") {
             out << "active-link: "
-                << (unlocked.session.data.active_link.empty()
+                << (unlocked.session().data.active_link.empty()
                         ? "(base)"
-                        : unlocked.session.data.active_link)
+                        : unlocked.session().data.active_link)
                 << "\n";
         }
         if (!key.empty() && key != "server" && key != "proxy" &&
@@ -1348,10 +1258,10 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         }
         if (key == "language") {
             if (sub == "unset") {
-                unlocked.session.data.language = "en";
+                unlocked.session().data.language = "en";
                 out << "language set: en\n";
             } else if (value == "en" || value == "ru") {
-                unlocked.session.data.language = value;
+                unlocked.session().data.language = value;
                 out << "language set: " << value << "\n";
             } else {
                 throw ToolError(ExitCode::Config, "CONFIG_VALUE",
@@ -1359,21 +1269,21 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             }
         } else if (key == "welcome") {
             if (sub == "unset") {
-                unlocked.session.data.welcome.clear();
+                unlocked.session().data.welcome.clear();
                 out << "welcome unset\n";
             } else {
-                unlocked.session.data.welcome = value;
+                unlocked.session().data.welcome = value;
                 out << "welcome set\n";
             }
         } else if (key == "humor") {
             if (sub == "unset") {
-                unlocked.session.data.humor = true;
+                unlocked.session().data.humor = true;
                 out << "humor set: on\n";
             } else if (value == "on" || value == "true") {
-                unlocked.session.data.humor = true;
+                unlocked.session().data.humor = true;
                 out << "humor set: on\n";
             } else if (value == "off" || value == "false") {
-                unlocked.session.data.humor = false;
+                unlocked.session().data.humor = false;
                 out << "humor set: off\n";
             } else {
                 throw ToolError(ExitCode::Config, "CONFIG_VALUE",
@@ -1381,10 +1291,10 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
             }
         } else if (key == "mode") {
             if (sub == "unset") {
-                unlocked.session.data.mode.clear();
+                unlocked.session().data.mode.clear();
                 out << "mode unset\n";
             } else if (value == "transfem" || value == "transmasc") {
-                unlocked.session.data.mode = value;
+                unlocked.session().data.mode = value;
                 out << "mode set: " << value << "\n";
             } else {
                 throw ToolError(ExitCode::Config, "CONFIG_VALUE",
@@ -1393,16 +1303,16 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         } else if (key == "active-link") {
             const std::string name =
                 sub == "unset" || value == "-" ? std::string{} : value;
-            select_link(unlocked.session.data, name);
+            select_link(unlocked.session().data, name);
             out << "active link: " << (name.empty() ? "(base)" : name) << "\n";
         } else if (key == "proxy") {
             if (sub == "unset") {
-                unlocked.session.data.proxy.clear();
+                unlocked.session().data.proxy.clear();
                 out << "proxy unset\n";
             } else {
                 const std::string normalized = normalize_proxy_url(value, &out);
                 validate_proxy_url(normalized);
-                unlocked.session.data.proxy = normalized;
+                unlocked.session().data.proxy = normalized;
                 out << "proxy set: " << normalized << "\n";
             }
         } else if (key == "server") {
@@ -1419,18 +1329,18 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
                 validate_server_url(next_url);
                 validate_hidden_service_host(next_url);
             }
-            if (!unlocked.session.data.server.empty() &&
-                !same_origin(next, unlocked.session.data.server)) {
-                unlocked.session.data.token.clear();
-                unlocked.session.data.cloud_key.clear();
-                unlocked.session.data.device_pass.clear();
-                unlocked.session.data.device_key_pem.clear();
-                unlocked.session.data.device_cert_pem.clear();
-                unlocked.session.data.device_fingerprint.clear();
+            if (!unlocked.session().data.server.empty() &&
+                !same_origin(next, unlocked.session().data.server)) {
+                unlocked.session().data.token.clear();
+                unlocked.session().data.cloud_key.clear();
+                unlocked.session().data.device_pass.clear();
+                unlocked.session().data.device_key_pem.clear();
+                unlocked.session().data.device_cert_pem.clear();
+                unlocked.session().data.device_fingerprint.clear();
                 err << "warning: server changed; the saved session and device "
                        "identity were cleared\n";
             }
-            unlocked.session.data.server = next;
+            unlocked.session().data.server = next;
             out << "server set: " << next << "\n";
         } else if (key == "transport") {
             throw ToolError(ExitCode::Usage, "TRANSPORT_SELECTION",
@@ -1443,9 +1353,9 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         } else {
             throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
         }
-        unlocked.session.data.updated_at = now_ms();
+        unlocked.session().data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+        Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
         return 0;
     }
 
@@ -1460,24 +1370,25 @@ int command_config_path(const ParsedArgs &parsed, std::ostream &out) {
     return 0;
 }
 
-int command_logs_show(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+int command_logs_show(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                      SessionContext *context) {
     if (parsed.options.log_file.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE", "logs show requires --log-file FILE");
     }
-    VaultSession session = unlock_required(parsed.options, in, out);
-    EncryptedLog::show(parsed.options.log_file, session.log_key, out);
+    UnlockedVault unlocked = unlock_required(parsed.options, in, out, context);
+    EncryptedLog::show(parsed.options.log_file, unlocked.session().log_key, out);
     return 0;
 }
 
 int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream &in,
-                 std::ostream &out, std::ostream &err) {
-    VaultSession session = unlock_required(parsed.options, in, out);
+                 std::ostream &out, std::ostream &err, SessionContext *context) {
+    UnlockedVault unlocked = unlock_required(parsed.options, in, out, context);
     if (parsed.options.debug) {
         err << "debug: " << name << " (M1 stub)\n";
     }
     if (!parsed.options.log_file.empty() &&
         (parsed.options.debug || parsed.options.trace)) {
-        EncryptedLog::append(parsed.options.log_file, session.log_key,
+        EncryptedLog::append(parsed.options.log_file, unlocked.session().log_key,
                              "debug: " + name + " invoked");
     }
 
@@ -1491,7 +1402,7 @@ int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream
     std::unique_ptr<ApiClient> client = make_api_client(parsed.options.server, http);
 
     if (name == "login") {
-        (void)client->login("", "", "", "", session.data.device_pass);
+        (void)client->login("", "", "", "", unlocked.session().data.device_pass);
     } else if (name == "logout") {
         client->logout();
     } else if (name == "whoami") {
@@ -1503,7 +1414,7 @@ int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream
 }
 
 int command_add_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                     std::ostream &err) {
+                     std::ostream &err, SessionContext *context) {
     if (parsed.command_args.size() != 2) {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "add-link needs URL NAME");
@@ -1519,7 +1430,7 @@ int command_add_link(const ParsedArgs &parsed, std::istream &in, std::ostream &o
         link.proxy = normalize_proxy_url(parsed.options.proxy, &err);
     }
 
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
     if (parsed.options.probe) {
         ParsedArgs probe = parsed;
         probe.options.server = url;
@@ -1532,38 +1443,39 @@ int command_add_link(const ParsedArgs &parsed, std::istream &in, std::ostream &o
         }
     }
 
-    add_link(unlocked.session.data, name, link, parsed.options.force);
-    unlocked.session.data.updated_at = now_ms();
+    add_link(unlocked.session().data, name, link, parsed.options.force);
+    unlocked.session().data.updated_at = now_ms();
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
     out << "link added: " << name << "\n";
     return 0;
 }
 
-int command_commit_server(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+int command_commit_server(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                          SessionContext *context) {
     if (parsed.command_args.size() != 1) {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "commit-server needs a link name (use - for the base link)");
     }
     const std::string name =
         parsed.command_args[0] == "-" ? std::string{} : parsed.command_args[0];
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    select_link(unlocked.session.data, name);
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    select_link(unlocked.session().data, name);
     const Paths paths = resolve_paths(parsed.options.config_dir);
-    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    Vault::save(paths.vault_file, unlocked.session().data, unlocked.master());
     out << "active link: " << (name.empty() ? "(base)" : name) << "\n";
     return 0;
 }
 
 int command_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-                 std::ostream &err) {
+                 std::ostream &err, SessionContext *context) {
     if (parsed.command_args.empty()) {
         throw ToolError(ExitCode::Usage, "USAGE",
                         "link needs list, show, rename, or remove");
     }
     const std::string sub = parsed.command_args.front();
-    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
-    VaultData &data = unlocked.session.data;
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out, context);
+    VaultData &data = unlocked.session().data;
 
     if (sub == "list") {
         for (const auto &entry : data.links) {
@@ -1591,7 +1503,7 @@ int command_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         rename_link(data, parsed.command_args[1], parsed.command_args[2]);
         data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, data, unlocked.master);
+        Vault::save(paths.vault_file, data, unlocked.master());
         out << "link renamed: " << parsed.command_args[1] << " -> "
             << parsed.command_args[2] << "\n";
         return 0;
@@ -1621,7 +1533,7 @@ int command_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         remove_link(data, name, parsed.options.force);
         data.updated_at = now_ms();
         const Paths paths = resolve_paths(parsed.options.config_dir);
-        Vault::save(paths.vault_file, data, unlocked.master);
+        Vault::save(paths.vault_file, data, unlocked.master());
         out << "link removed: " << name << "\n";
         return 0;
     }
@@ -1730,7 +1642,7 @@ std::string read_account_password(const GlobalOptions &options, std::istream &in
 }
 
 int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
-             std::ostream &err) {
+             std::ostream &err, SessionContext *context) {
     (void)err;
 
     if (!known_commands().count(parsed.command)) {
@@ -1752,45 +1664,45 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         return command_init(parsed, in, out, err);
     }
     if (parsed.command == "login") {
-        return command_login(parsed, in, out, err);
+        return command_login(parsed, in, out, err, context);
     }
     if (parsed.command == "logout") {
-        return command_logout(parsed, in, out, err);
+        return command_logout(parsed, in, out, err, context);
     }
     if (parsed.command == "whoami") {
-        return command_whoami(parsed, in, out, err);
+        return command_whoami(parsed, in, out, err, context);
     }
     if (parsed.command == "add-link") {
-        return command_add_link(parsed, in, out, err);
+        return command_add_link(parsed, in, out, err, context);
     }
     if (parsed.command == "commit-server") {
-        return command_commit_server(parsed, in, out);
+        return command_commit_server(parsed, in, out, context);
     }
     if (parsed.command == "link") {
-        return command_link(parsed, in, out, err);
+        return command_link(parsed, in, out, err, context);
     }
     if (parsed.command == "snapshot") {
-        return command_snapshot(parsed, in, out, err);
+        return command_snapshot(parsed, in, out, err, context);
     }
     if (parsed.command == "config") {
         if (!parsed.command_args.empty() && parsed.command_args.front() == "path") {
             return command_config_path(parsed, out);
         }
-        return command_config(parsed, in, out, err);
+        return command_config(parsed, in, out, err, context);
     }
     if (parsed.command == "logs") {
         if (!parsed.command_args.empty() && parsed.command_args.front() == "show") {
-            return command_logs_show(parsed, in, out);
+            return command_logs_show(parsed, in, out, context);
         }
         const std::string name =
             parsed.command_args.empty() ? "logs" : "logs " + parsed.command_args.front();
-        return command_stub(name, parsed, in, out, err);
+        return command_stub(name, parsed, in, out, err, context);
     }
 
     if (parsed.command == "look" && parsed.options.snapshot.empty()) {
         const Paths paths = resolve_paths(parsed.options.config_dir);
         if (Vault::exists(paths.vault_file)) {
-            return command_look_remote(parsed, in, out, err);
+            return command_look_remote(parsed, in, out, err, context);
         }
     }
 
@@ -1801,7 +1713,7 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     if (live_mutation && parsed.options.snapshot.empty()) {
         const Paths paths = resolve_paths(parsed.options.config_dir);
         if (Vault::exists(paths.vault_file)) {
-            return command_mutate_remote(parsed, in, out, err);
+            return command_mutate_remote(parsed, in, out, err, context);
         }
     }
 
@@ -1813,5 +1725,5 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     if (!parsed.command_args.empty()) {
         name += " " + parsed.command_args.front();
     }
-    return command_stub(name, parsed, in, out, err);
+    return command_stub(name, parsed, in, out, err, context);
 }
