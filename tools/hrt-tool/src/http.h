@@ -16,6 +16,12 @@ Url parse_url(const std::string &url);
 void validate_server_url(const Url &url);
 void validate_proxy_url(const std::string &proxy);
 
+/* Onion v3 and I2P host-name policy, independent of the scheme. */
+void validate_hidden_service_host(const Url &url);
+
+/* Accepts hrt://, https://, and policy-limited http:// server targets. */
+void validate_server_target(const std::string &server);
+
 /* Returns the normalised proxy. socks5:// becomes socks5h:// so the proxy
    resolves every destination name. Writes a one-line note to *note when the
    scheme changed. Throws PROXY_URL for anything except socks5/socks5h. */

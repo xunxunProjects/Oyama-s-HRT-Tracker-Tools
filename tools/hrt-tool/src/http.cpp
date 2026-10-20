@@ -416,6 +416,33 @@ void validate_proxy_url(const std::string &proxy) {
     }
 }
 
+void validate_hidden_service_host(const Url &url) {
+    if (is_onion_host(url.host) && !valid_onion_v3(url.host)) {
+        throw ToolError(ExitCode::Usage, "ONION_ADDRESS",
+                        "a Tor v3 onion address is 56 base32 characters followed by .onion");
+    }
+    if (is_i2p_host(url.host) && !valid_i2p_host(url.host)) {
+        throw ToolError(ExitCode::Usage, "I2P_ADDRESS",
+                        "invalid I2P host name");
+    }
+}
+
+void validate_server_target(const std::string &server) {
+    const Url url = parse_url(server);
+    if (url.scheme == "hrt") {
+        if (!url.path.empty() && url.path != "/") {
+            throw ToolError(ExitCode::Usage, "HRT_URL",
+                            "an hrt:// server URL has no path");
+        }
+    } else if (url.scheme == "https" || url.scheme == "http") {
+        validate_server_url(url);
+    } else {
+        throw ToolError(ExitCode::Usage, "SERVER_URL",
+                        "server must use hrt://, https://, or a policy-limited http://");
+    }
+    validate_hidden_service_host(url);
+}
+
 std::string normalize_proxy_url(const std::string &proxy, std::ostream *note) {
     const Url url = parse_url(proxy);
     if (url.scheme != "socks5" && url.scheme != "socks5h") {

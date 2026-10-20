@@ -1,6 +1,7 @@
 #include "local_commands.h"
 
 #include "backup_envelope.h"
+#include "command_flags.h"
 #include "encrypted_file.h"
 #include "entropy.h"
 #include "error.h"
@@ -584,54 +585,6 @@ std::string format_lab_value(double value, const std::string &unit) {
 
 ModeKey parse_mode_option(const std::string &value) {
     return value == "transmasc" ? ModeKey::Transmasc : ModeKey::Transfem;
-}
-
-struct CommandFlags {
-    std::map<std::string, std::string> values;
-    std::set<std::string> flags;
-    std::vector<std::string> positionals;
-    std::vector<std::string> extras;
-};
-
-CommandFlags parse_command_flags(const std::vector<std::string> &args,
-                                 const std::set<std::string> &value_flags,
-                                 const std::set<std::string> &boolean_flags) {
-    CommandFlags out;
-    for (size_t i = 0; i < args.size(); ++i) {
-        const std::string token = args[i];
-        if (token.empty() || token.front() != '-') {
-            out.positionals.push_back(token);
-            continue;
-        }
-        std::string name = token;
-        std::string value;
-        bool has_value = false;
-        const std::string::size_type equals = token.find('=');
-        if (equals != std::string::npos) {
-            name = token.substr(0, equals);
-            value = token.substr(equals + 1);
-            has_value = true;
-        }
-        if (boolean_flags.count(name) != 0) {
-            out.flags.insert(name);
-            continue;
-        }
-        if (value_flags.count(name) == 0) {
-            throw ToolError(ExitCode::Usage, "FLAG", "unknown flag: " + name);
-        }
-        if (!has_value) {
-            if (i + 1 >= args.size()) {
-                throw ToolError(ExitCode::Usage, "FLAG", "missing value for " + name);
-            }
-            value = args[++i];
-        }
-        if (name == "--extras") {
-            out.extras.push_back(value);
-        } else {
-            out.values[name] = value;
-        }
-    }
-    return out;
 }
 
 std::string require_value(const CommandFlags &flags, const std::string &name) {

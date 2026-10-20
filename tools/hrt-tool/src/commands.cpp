@@ -3,6 +3,7 @@
 #include "api.h"
 #include "backup_envelope.h"
 #include "encrypted_file.h"
+#include "link.h"
 #include "entropy.h"
 #include "error.h"
 #include "hrt_client.h"
@@ -224,7 +225,7 @@ void enforce_login_cooldown(const VaultData &data) {
     }
     const int64_t seconds =
         (kLoginFailureCooldownMs - elapsed + 999) / 1000;
-    throw ToolError(ExitCode::Vault, "LOGIN_COOLDOWN",
+    throw ToolError(ExitCode::Auth, "LOGIN_COOLDOWN",
                     "a login attempt failed recently; try again in " +
                         std::to_string(seconds) + " seconds");
 }
@@ -293,17 +294,6 @@ std::string authenticated_server(const ParsedArgs &parsed, const VaultData &data
                             parsed.options.server + " to switch");
     }
     return saved;
-}
-
-void validate_hidden_service_host(const Url &url) {
-    if (is_onion_host(url.host) && !valid_onion_v3(url.host)) {
-        throw ToolError(ExitCode::Usage, "ONION_ADDRESS",
-                        "a Tor v3 onion address is 56 base32 characters followed by .onion");
-    }
-    if (is_i2p_host(url.host) && !valid_i2p_host(url.host)) {
-        throw ToolError(ExitCode::Usage, "I2P_ADDRESS",
-                        "invalid I2P host name");
-    }
 }
 
 std::string ensure_hrt_trust(UnlockedVault &unlocked, const ParsedArgs &parsed,
@@ -1310,8 +1300,36 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         if (key.empty() || key == "compute") {
             out << "compute: local\n";
         }
+        if (key.empty() || key == "language") {
+            out << "language: " << unlocked.session.data.language << "\n";
+        }
+        if (key.empty() || key == "welcome") {
+            out << "welcome: "
+                << (unlocked.session.data.welcome.empty()
+                        ? "(default)"
+                        : unlocked.session.data.welcome)
+                << "\n";
+        }
+        if (key.empty() || key == "humor") {
+            out << "humor: " << (unlocked.session.data.humor ? "on" : "off") << "\n";
+        }
+        if (key.empty() || key == "mode") {
+            out << "mode: "
+                << (unlocked.session.data.mode.empty() ? "(default)"
+                                                       : unlocked.session.data.mode)
+                << "\n";
+        }
+        if (key.empty() || key == "active-link") {
+            out << "active-link: "
+                << (unlocked.session.data.active_link.empty()
+                        ? "(base)"
+                        : unlocked.session.data.active_link)
+                << "\n";
+        }
         if (!key.empty() && key != "server" && key != "proxy" &&
-            key != "transport" && key != "compute") {
+            key != "transport" && key != "compute" && key != "language" &&
+            key != "welcome" && key != "humor" && key != "mode" &&
+            key != "active-link") {
             throw ToolError(ExitCode::Usage, "CONFIG_KEY", "unknown config key: " + key);
         }
         return 0;
@@ -1328,7 +1346,56 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
         if (sub == "set" && value.empty()) {
             throw ToolError(ExitCode::Usage, "CONFIG_VALUE", "missing value");
         }
-        if (key == "proxy") {
+        if (key == "language") {
+            if (sub == "unset") {
+                unlocked.session.data.language = "en";
+                out << "language set: en\n";
+            } else if (value == "en" || value == "ru") {
+                unlocked.session.data.language = value;
+                out << "language set: " << value << "\n";
+            } else {
+                throw ToolError(ExitCode::Config, "CONFIG_VALUE",
+                                "language must be en or ru");
+            }
+        } else if (key == "welcome") {
+            if (sub == "unset") {
+                unlocked.session.data.welcome.clear();
+                out << "welcome unset\n";
+            } else {
+                unlocked.session.data.welcome = value;
+                out << "welcome set\n";
+            }
+        } else if (key == "humor") {
+            if (sub == "unset") {
+                unlocked.session.data.humor = true;
+                out << "humor set: on\n";
+            } else if (value == "on" || value == "true") {
+                unlocked.session.data.humor = true;
+                out << "humor set: on\n";
+            } else if (value == "off" || value == "false") {
+                unlocked.session.data.humor = false;
+                out << "humor set: off\n";
+            } else {
+                throw ToolError(ExitCode::Config, "CONFIG_VALUE",
+                                "humor must be on or off");
+            }
+        } else if (key == "mode") {
+            if (sub == "unset") {
+                unlocked.session.data.mode.clear();
+                out << "mode unset\n";
+            } else if (value == "transfem" || value == "transmasc") {
+                unlocked.session.data.mode = value;
+                out << "mode set: " << value << "\n";
+            } else {
+                throw ToolError(ExitCode::Config, "CONFIG_VALUE",
+                                "mode must be transfem or transmasc");
+            }
+        } else if (key == "active-link") {
+            const std::string name =
+                sub == "unset" || value == "-" ? std::string{} : value;
+            select_link(unlocked.session.data, name);
+            out << "active link: " << (name.empty() ? "(base)" : name) << "\n";
+        } else if (key == "proxy") {
             if (sub == "unset") {
                 unlocked.session.data.proxy.clear();
                 out << "proxy unset\n";
@@ -1435,11 +1502,138 @@ int command_stub(const std::string &name, const ParsedArgs &parsed, std::istream
                     name + " is not implemented in M1");
 }
 
+int command_add_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                     std::ostream &err) {
+    if (parsed.command_args.size() != 2) {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "add-link needs URL NAME");
+    }
+    const std::string &url = parsed.command_args[0];
+    const std::string &name = parsed.command_args[1];
+    validate_server_target(url);
+
+    LinkData link;
+    link.url = url;
+    link.mode = parsed.options.mode;
+    if (parsed.options.proxy_explicit) {
+        link.proxy = normalize_proxy_url(parsed.options.proxy, &err);
+    }
+
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    if (parsed.options.probe) {
+        ParsedArgs probe = parsed;
+        probe.options.server = url;
+        probe.options.server_explicit = true;
+        probe.options.proxy = link.proxy;
+        probe.options.proxy_explicit = true;
+        const std::string pin = ensure_trust(unlocked, probe, in, err, url);
+        if (!pin.empty()) {
+            err << "pinned: " << pin << "\n";
+        }
+    }
+
+    add_link(unlocked.session.data, name, link, parsed.options.force);
+    unlocked.session.data.updated_at = now_ms();
+    const Paths paths = resolve_paths(parsed.options.config_dir);
+    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    out << "link added: " << name << "\n";
+    return 0;
+}
+
+int command_commit_server(const ParsedArgs &parsed, std::istream &in, std::ostream &out) {
+    if (parsed.command_args.size() != 1) {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "commit-server needs a link name (use - for the base link)");
+    }
+    const std::string name =
+        parsed.command_args[0] == "-" ? std::string{} : parsed.command_args[0];
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    select_link(unlocked.session.data, name);
+    const Paths paths = resolve_paths(parsed.options.config_dir);
+    Vault::save(paths.vault_file, unlocked.session.data, unlocked.master);
+    out << "active link: " << (name.empty() ? "(base)" : name) << "\n";
+    return 0;
+}
+
+int command_link(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                 std::ostream &err) {
+    if (parsed.command_args.empty()) {
+        throw ToolError(ExitCode::Usage, "USAGE",
+                        "link needs list, show, rename, or remove");
+    }
+    const std::string sub = parsed.command_args.front();
+    UnlockedVault unlocked = unlock_full(parsed.options, in, out);
+    VaultData &data = unlocked.session.data;
+
+    if (sub == "list") {
+        for (const auto &entry : data.links) {
+            const std::string &name = entry.first;
+            const LinkData &link = entry.second;
+            out << (name.empty() ? "(base)" : name) << "  " << link.url
+                << "  mode=" << (link.mode.empty() ? "default" : link.mode)
+                << "  " << (link.token.empty() ? "logged-out" : "logged-in")
+                << (name == data.active_link ? "  active" : "") << "\n";
+        }
+        return 0;
+    }
+    if (sub == "show") {
+        if (parsed.command_args.size() != 2) {
+            throw ToolError(ExitCode::Usage, "USAGE", "link show needs a name");
+        }
+        const std::string &name = parsed.command_args[1];
+        out << link_summary(name, require_link(data, name));
+        return 0;
+    }
+    if (sub == "rename") {
+        if (parsed.command_args.size() != 3) {
+            throw ToolError(ExitCode::Usage, "USAGE", "link rename needs OLD NEW");
+        }
+        rename_link(data, parsed.command_args[1], parsed.command_args[2]);
+        data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, data, unlocked.master);
+        out << "link renamed: " << parsed.command_args[1] << " -> "
+            << parsed.command_args[2] << "\n";
+        return 0;
+    }
+    if (sub == "remove") {
+        if (parsed.command_args.size() != 2) {
+            throw ToolError(ExitCode::Usage, "USAGE", "link remove needs a name");
+        }
+        const std::string &name = parsed.command_args[1];
+        (void)err;
+        if (!parsed.options.yes) {
+            out << "Remove link " << name << "? [y/N]: ";
+            out.flush();
+            std::string answer;
+            if (!std::getline(in, answer)) {
+                throw ToolError(ExitCode::Cancelled, "CANCELLED",
+                                "link removal cancelled");
+            }
+            if (!answer.empty() && answer.back() == '\r') {
+                answer.pop_back();
+            }
+            if (answer != "y" && answer != "yes") {
+                throw ToolError(ExitCode::Cancelled, "CANCELLED",
+                                "link removal cancelled");
+            }
+        }
+        remove_link(data, name, parsed.options.force);
+        data.updated_at = now_ms();
+        const Paths paths = resolve_paths(parsed.options.config_dir);
+        Vault::save(paths.vault_file, data, unlocked.master);
+        out << "link removed: " << name << "\n";
+        return 0;
+    }
+    throw ToolError(ExitCode::Usage, "USAGE",
+                    "link needs list, show, rename, or remove");
+}
+
 const std::set<std::string> &known_commands() {
     static const std::set<std::string> kCommands = {
-        "version", "init",    "login",    "logout", "whoami", "look",   "add",
-        "dose",    "lab",     "weight",   "export", "import", "snapshot", "config",
-        "logs",
+        "version", "init",    "login",    "logout",    "whoami", "look",
+        "add",     "dose",    "lab",      "weight",    "export", "import",
+        "snapshot", "config", "logs",     "add-link",  "commit-server", "link",
     };
     return kCommands;
 }
@@ -1565,6 +1759,15 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
     }
     if (parsed.command == "whoami") {
         return command_whoami(parsed, in, out, err);
+    }
+    if (parsed.command == "add-link") {
+        return command_add_link(parsed, in, out, err);
+    }
+    if (parsed.command == "commit-server") {
+        return command_commit_server(parsed, in, out);
+    }
+    if (parsed.command == "link") {
+        return command_link(parsed, in, out, err);
     }
     if (parsed.command == "snapshot") {
         return command_snapshot(parsed, in, out, err);

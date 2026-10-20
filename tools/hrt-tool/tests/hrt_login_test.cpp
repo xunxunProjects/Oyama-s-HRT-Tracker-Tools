@@ -227,7 +227,7 @@ int main() {
             CHECK_EQ(cleared.data.device_fingerprint.size(), static_cast<size_t>(64));
 
             const RunResult after = run(whoami_args);
-            CHECK_EQ(after.code, static_cast<int>(ExitCode::Vault));
+            CHECK_EQ(after.code, static_cast<int>(ExitCode::Auth));
             CHECK(after.err.find("NOT_LOGGED_IN") != std::string::npos);
         }
     }
@@ -264,17 +264,17 @@ int main() {
                 "login", "--username", "alice",
             };
             const RunResult denied = run(args);
-            if (denied.code != static_cast<int>(ExitCode::Vault)) {
+            if (denied.code != static_cast<int>(ExitCode::Auth)) {
                 std::cerr << "denied stderr: " << denied.err << "\n";
             }
-            CHECK_EQ(denied.code, static_cast<int>(ExitCode::Vault));
+            CHECK_EQ(denied.code, static_cast<int>(ExitCode::Auth));
             CHECK(denied.err.find("PAIR_DENIED") != std::string::npos);
 
             const RunResult cooldown = run(args);
-            if (cooldown.code != static_cast<int>(ExitCode::Vault)) {
+            if (cooldown.code != static_cast<int>(ExitCode::Auth)) {
                 std::cerr << "cooldown stderr: " << cooldown.err << "\n";
             }
-            CHECK_EQ(cooldown.code, static_cast<int>(ExitCode::Vault));
+            CHECK_EQ(cooldown.code, static_cast<int>(ExitCode::Auth));
             CHECK(cooldown.err.find("try again in") != std::string::npos);
             size_t starts = 0;
             for (const nlohmann::json &frame : server.frames()) {
@@ -347,10 +347,10 @@ int main() {
         CHECK(missing_tor.err.find("config set proxy socks5h://127.0.0.1:9050") !=
               std::string::npos);
 
-        const RunResult weak_tor = login_with_server(
+        const RunResult socks5_alias = login_with_server(
             "hrt://" + onion, {"--proxy", "socks5://127.0.0.1:9050"});
-        CHECK_EQ(weak_tor.code, static_cast<int>(ExitCode::Usage));
-        CHECK(weak_tor.err.find("PROXY_DNS") != std::string::npos);
+        CHECK_EQ(socks5_alias.code, static_cast<int>(ExitCode::Network));
+        CHECK(socks5_alias.err.find("PROXY_DNS") == std::string::npos);
 
         const RunResult bad_onion =
             login_with_server("hrt://short.onion", {});

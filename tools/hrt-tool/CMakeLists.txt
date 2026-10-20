@@ -39,6 +39,7 @@ add_library(hrtcpp STATIC
     src/api_live.cpp
     src/backup_envelope.cpp
     src/cli.cpp
+    src/command_flags.cpp
     src/commands.cpp
     src/encrypted_file.cpp
     src/entropy.cpp
@@ -49,6 +50,7 @@ add_library(hrtcpp STATIC
     src/hrt_pairing.cpp
     src/hrt_protocol.cpp
     src/api_hrt.cpp
+    src/link.cpp
     src/local_commands.cpp
     src/log.cpp
     src/model.cpp
@@ -103,6 +105,14 @@ if(BUILD_TESTING)
     add_executable(vault_links_test tests/vault_links_test.cpp)
     target_link_libraries(vault_links_test PRIVATE hrtcpp)
     add_test(NAME vault_links COMMAND vault_links_test)
+
+    add_executable(link_test tests/link_test.cpp)
+    target_link_libraries(link_test PRIVATE hrtcpp)
+    add_test(NAME link COMMAND link_test)
+
+    add_executable(link_commands_test tests/link_commands_test.cpp)
+    target_link_libraries(link_commands_test PRIVATE hrtcpp)
+    add_test(NAME link_commands COMMAND link_commands_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
