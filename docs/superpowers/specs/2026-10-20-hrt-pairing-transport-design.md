@@ -348,9 +348,10 @@ protocol adapter** in front of the existing self-hosted web application:
   not reimplement password auth. This keeps the original web auth code
   untouched and avoids a second security boundary to audit.
 - **Raw server responsibilities.** A standalone Node.js/TypeScript process
-  owns the TLS 1.3 listener, the server certificate and device CA, mTLS
-  verification, the framed protocol, connection limits, and the loopback
-  call to the web app. It stores no account data.
+  owns the TLS 1.3 listener, the server certificate, mTLS certificate
+  fingerprint checks, the framed protocol, connection limits, and the
+  loopback call to the web app. It stores no account data and has no device
+  CA; the web app owns the device registry.
 - **Wire protocol.** ALPN `hrt/1`; TLS 1.3 with a pinned server key; client
   certificates required after pairing. Frames are a 4-byte big-endian
   length followed by a JSON object with a request id, an operation
@@ -360,12 +361,13 @@ protocol adapter** in front of the existing self-hosted web application:
   16 MiB JSON body after base64 expansion) with per-connection timeouts,
   bounded connections, and request-id idempotency.
 - **Pairing path.** `pair.start` and `pair.poll` are the only operations
-  allowed without a client certificate. The raw server forwards them to
-  the web app's internal `/api/tool/v1/hrt/*` endpoints over loopback,
-  authenticated by a service token in a 0600 file. The web app records the
-  observed IP/country and returns the approval state. After approval, the
-  raw server signs a device certificate for the approved public key and
-  returns the token; subsequent frames require mTLS.
+  allowed without a client certificate. The CLI generates a self-signed
+  device certificate and sends it in `pair.start`; the web app records its
+  SHA-256 fingerprint on approval. The raw server forwards the pair frames
+  to the web app's internal `/api/tool/v1/hrt/*` endpoints over loopback,
+  authenticated by a service token in a 0600 file, and returns the token.
+  Subsequent frames require a client certificate whose fingerprint the web
+  app authorizes.
 - **Web approval.** The existing web session calls additive
   Account → Security endpoints in the web app; the web app owns the data.
   The raw server never serves the browser session.

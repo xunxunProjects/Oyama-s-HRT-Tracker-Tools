@@ -39,11 +39,15 @@ F2F/GPG service (separate advanced component)
   start; the CLI pins its SPKI SHA-256 on first contact. No public CA is
   required for the raw transport, but pinning is mandatory.
 - Client certificate: not required for `pair.start` / `pair.poll`; required
-  for every other frame. Issued by the raw server's device CA after web
-  approval. The CLI stores the private key and certificate in the encrypted
-  vault.
-- The server certificate and device CA live in the persistent volume with
-  mode 0600; the CA private key never leaves the raw-server process/volume.
+  for every other frame. The CLI generates a random key pair and a
+  self-signed certificate on first pairing, sends the certificate in the
+  `pair.start` body, and stores the private key and certificate in the
+  encrypted vault. The web app records the SHA-256 DER fingerprint when it
+  approves the request; the raw server compares the certificate presented
+  on each connection with that registry. No device CA is needed.
+- The server certificate lives in the persistent volume with the private
+  key mode 0600. There is no server-side device CA; revocation is a web-app
+  state change and is enforced by the authorize call.
 - Proxies: the CLI uses `socks5h://` only; target names are never resolved
   locally. The proxy's own host should be an IP or loopback.
 
@@ -151,16 +155,24 @@ Rules:
 
 - Raw server certificate: generated at first enable; pin displayed to the
   operator; rotation requires re-trust (`--trust-server`) like HTTPS.
-- Device CA: generated at first enable, stored encrypted/0600; signs only
-  device certificates for approved public keys; CN = device key id; short
-  validity (for example 90 days) with renewal through pairing.
-- Revocation: the web app records `revoked_at`; the raw server checks the
-  web app's device state on each `request` (cached briefly) and rejects
-  revoked certificates with `CERT_INVALID`. A CRL is optional; the web
-  state is authoritative.
-- Private keys: CLI device key generated with OpenSSL on first pairing;
-  stored only in the encrypted vault; never uploaded; zeroized on logout if
-  the user chooses not to keep the device.
+- Device identity: the CLI generates a random key pair and self-signed
+  certificate on first pairing. It uploads only the certificate in
+  `pair.start`; the private key stays in the encrypted vault. The web app
+  computes and stores the SHA-256 DER fingerprint when it approves the
+  request. No device CA or server-signed certificate is used.
+- Request authorization: the raw server computes the presented
+  certificate's fingerprint and asks the web app
+  (`/api/tool/v1/hrt/device/authorize`) whether that fingerprint belongs
+  to an active, non-revoked device for the account. The positive answer is
+  cached briefly (default 10 seconds) and re-checked after that.
+- Rotation: generate a new key pair/certificate, pair it again, and revoke
+  the old device. The old certificate stops authorizing immediately after
+  the web state changes and the cache expires.
+- Revocation: `revoked_at` in the web app is authoritative; a CRL is not
+  needed. A revoked device gets `NOT_AUTHORIZED`, never a token.
+- Private keys: CLI device key generated with OpenSSL; stored only in the
+  encrypted vault; never uploaded; zeroized on logout if the user chooses
+  not to keep the device.
 - No hardware identifiers. The device key is random and per install.
 
 ## 7. Web API (additive; existing auth untouched)
