@@ -416,6 +416,25 @@ void validate_proxy_url(const std::string &proxy) {
     }
 }
 
+std::string normalize_proxy_url(const std::string &proxy, std::ostream *note) {
+    const Url url = parse_url(proxy);
+    if (url.scheme != "socks5" && url.scheme != "socks5h") {
+        throw ToolError(ExitCode::Usage, "PROXY_URL",
+                        "proxy must use socks5:// or socks5h://; http, https, "
+                        "and socks4 proxies are refused");
+    }
+    std::string host = url.host;
+    if (host.find(':') != std::string::npos) {
+        host = "[" + host + "]";
+    }
+    const std::string port = url.port.empty() ? "1080" : url.port;
+    if (note != nullptr && url.scheme == "socks5") {
+        *note << "note: socks5:// is handled as socks5h:// so DNS stays at the "
+                 "proxy\n";
+    }
+    return "socks5h://" + host + ":" + port;
+}
+
 bool is_onion_host(const std::string &host) {
     const std::string name = lower_ascii(host);
     return name.size() > 6 && name.compare(name.size() - 6, 6, ".onion") == 0;

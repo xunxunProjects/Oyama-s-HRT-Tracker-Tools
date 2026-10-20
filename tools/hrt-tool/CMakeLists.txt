@@ -92,6 +92,10 @@ if(BUILD_TESTING)
     target_link_libraries(exit_code_test PRIVATE hrtcpp)
     add_test(NAME exit_code COMMAND exit_code_test)
 
+    add_executable(proxy_test tests/proxy_test.cpp)
+    target_link_libraries(proxy_test PRIVATE hrtcpp)
+    add_test(NAME proxy COMMAND proxy_test)
+
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)
     add_test(NAME crypto COMMAND crypto_test)

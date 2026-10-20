@@ -16,6 +16,11 @@ Url parse_url(const std::string &url);
 void validate_server_url(const Url &url);
 void validate_proxy_url(const std::string &proxy);
 
+/* Returns the normalised proxy. socks5:// becomes socks5h:// so the proxy
+   resolves every destination name. Writes a one-line note to *note when the
+   scheme changed. Throws PROXY_URL for anything except socks5/socks5h. */
+std::string normalize_proxy_url(const std::string &proxy, std::ostream *note);
+
 struct HttpResponse {
     long status = 0;
     std::string body;

@@ -154,8 +154,12 @@ std::string command_value(const std::vector<std::string> &args,
 HttpOptions http_options_for(const ParsedArgs &parsed, const VaultData &data,
                              std::ostream &err) {
     HttpOptions http;
-    http.proxy =
-        parsed.options.proxy_explicit ? parsed.options.proxy : data.proxy;
+    if (parsed.options.proxy_explicit) {
+        http.proxy = normalize_proxy_url(parsed.options.proxy, &err);
+    } else if (!data.proxy.empty()) {
+        /* A vault written by an older build may still hold socks5://. */
+        http.proxy = normalize_proxy_url(data.proxy, nullptr);
+    }
     http.debug = parsed.options.debug;
     http.trace = parsed.options.trace;
     http.timeout_s = parsed.options.timeout_s;
@@ -1329,9 +1333,10 @@ int command_config(const ParsedArgs &parsed, std::istream &in, std::ostream &out
                 unlocked.session.data.proxy.clear();
                 out << "proxy unset\n";
             } else {
-                validate_proxy_url(value);
-                unlocked.session.data.proxy = value;
-                out << "proxy set: " << value << "\n";
+                const std::string normalized = normalize_proxy_url(value, &out);
+                validate_proxy_url(normalized);
+                unlocked.session.data.proxy = normalized;
+                out << "proxy set: " << normalized << "\n";
             }
         } else if (key == "server") {
             const std::string next =
