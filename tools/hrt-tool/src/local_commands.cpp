@@ -117,7 +117,24 @@ bool read_digits(const std::string &text, size_t &pos, size_t count, int &value)
     return true;
 }
 
-double parse_time_hours(const std::string &text, bool utc_requested) {
+double parse_time_hours_impl(const std::string &text, bool utc_requested) {
+    /* The issue's format is YYYY,M,D:HH:MM. Translate it to the ISO form the
+       rest of the parser already understands. */
+    if (text.find(',') != std::string::npos) {
+        std::string translated = text;
+        const size_t first = translated.find(',');
+        const size_t second = translated.find(',', first + 1);
+        if (first == std::string::npos || second == std::string::npos) {
+            throw ToolError(ExitCode::Usage, "TIME", "invalid date: " + text);
+        }
+        translated[first] = '-';
+        translated[second] = '-';
+        const size_t separator = second + 3;
+        if (separator < translated.size() && translated[separator] == ':') {
+            translated[separator] = 'T';
+        }
+        return parse_time_hours_impl(translated, utc_requested);
+    }
     if (text == "now") {
         return now_hours();
     }
@@ -243,7 +260,7 @@ double parse_time_hours(const std::string &text, bool utc_requested) {
     return static_cast<double>(epoch) / 3600.0 + fraction / 3600.0;
 }
 
-double parse_dose_mg(const std::string &text) {
+double parse_dose_mg_impl(const std::string &text) {
     double value = 0.0;
     char unit[16] = {};
     const int matched = std::sscanf(text.c_str(), "%lf%15s", &value, unit);
@@ -282,7 +299,7 @@ std::string normalized_key(const std::string &text) {
     return out;
 }
 
-int parse_route(const std::string &text) {
+int parse_route_impl(const std::string &text) {
     static const std::map<std::string, int> kRoutes = {
         {"sublingual", HRTCORE_ROUTE_SUBLINGUAL},
         {"sl", HRTCORE_ROUTE_SUBLINGUAL},
@@ -323,7 +340,7 @@ std::string route_display(int route) {
     }
 }
 
-int parse_ester(const std::string &drug) {
+int parse_ester_impl(const std::string &drug) {
     static const std::map<std::string, int> kEsters = {
         {"estradiolvalerate", HRTCORE_ESTER_EV},  {"ev", HRTCORE_ESTER_EV},
         {"estradiolbenzoate", HRTCORE_ESTER_EB},  {"eb", HRTCORE_ESTER_EB},
@@ -860,12 +877,12 @@ json apply_add_local(const ParsedArgs &parsed, json context_payload, std::ostrea
     if (dose_text.empty()) {
         throw ToolError(ExitCode::Usage, "DOSE", "pass --measurement (for example 2mg)");
     }
-    const int ester = parse_ester(drug);
-    const double dose = clean_dose_mg(parse_dose_mg(dose_text));
-    const double time_h = parse_time_hours(time_text, parsed.options.utc);
+    const int ester = parse_ester_impl(drug);
+    const double dose = clean_dose_mg(parse_dose_mg_impl(dose_text));
+    const double time_h = parse_time_hours_impl(time_text, parsed.options.utc);
     int route = default_route(ester);
     if (flags.values.count("--route") != 0) {
-        route = parse_route(flags.values.at("--route"));
+        route = parse_route_impl(flags.values.at("--route"));
     } else {
         err << "assuming route: " << route_display(route) << "\n";
     }
@@ -971,21 +988,21 @@ std::optional<json> apply_dose_local(const ParsedArgs &parsed, json context_payl
             throw ToolError(ExitCode::Data, "NOT_FOUND", "no event with id " + id);
         }
         if (flags.values.count("--drug") != 0) {
-            (*record)["ester"] = ester_code(parse_ester(flags.values.at("--drug")));
+            (*record)["ester"] = ester_code(parse_ester_impl(flags.values.at("--drug")));
         }
         if (flags.values.count("--route") != 0) {
-            (*record)["route"] = route_display(parse_route(flags.values.at("--route")));
+            (*record)["route"] = route_display(parse_route_impl(flags.values.at("--route")));
         }
         if (flags.values.count("--time") != 0) {
             (*record)["timeH"] =
-                parse_time_hours(flags.values.at("--time"), parsed.options.utc);
+                parse_time_hours_impl(flags.values.at("--time"), parsed.options.utc);
         }
         if (flags.values.count("--measurement") != 0) {
             (*record)["doseMG"] =
-                clean_dose_mg(parse_dose_mg(flags.values.at("--measurement")));
+                clean_dose_mg(parse_dose_mg_impl(flags.values.at("--measurement")));
         } else if (flags.values.count("--dose") != 0) {
             (*record)["doseMG"] =
-                clean_dose_mg(parse_dose_mg(flags.values.at("--dose")));
+                clean_dose_mg(parse_dose_mg_impl(flags.values.at("--dose")));
         }
         (*record)["updatedAt"] = now_milliseconds();
         clear_tombstone(payload, mode, RecordKind::Events, id);
@@ -1048,7 +1065,7 @@ std::optional<json> apply_lab_local(const ParsedArgs &parsed, json context_paylo
     if (sub == "add") {
         json lab{
             {"id", random_id()},
-            {"timeH", parse_time_hours(require_value(flags, "--time"), parsed.options.utc)},
+            {"timeH", parse_time_hours_impl(require_value(flags, "--time"), parsed.options.utc)},
             {"concValue", parse_lab_value(require_value(flags, "--value"))},
             {"unit", canonical_lab_unit(require_value(flags, "--unit"))},
             {"updatedAt", now_milliseconds()},
@@ -1075,7 +1092,7 @@ std::optional<json> apply_lab_local(const ParsedArgs &parsed, json context_paylo
         }
         if (flags.values.count("--time") != 0) {
             (*record)["timeH"] =
-                parse_time_hours(flags.values.at("--time"), parsed.options.utc);
+                parse_time_hours_impl(flags.values.at("--time"), parsed.options.utc);
         }
         if (flags.values.count("--value") != 0) {
             (*record)["concValue"] = parse_lab_value(flags.values.at("--value"));
@@ -1306,6 +1323,14 @@ nlohmann::json build_pk_view(
 std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags) {
     return parse_offsets_impl(flags);
 }
+
+double parse_time_hours(const std::string &text, bool utc) {
+    return parse_time_hours_impl(text, utc);
+}
+
+int parse_ester(const std::string &drug) { return parse_ester_impl(drug); }
+int parse_route(const std::string &route) { return parse_route_impl(route); }
+double parse_dose_mg(const std::string &text) { return parse_dose_mg_impl(text); }
 
 int handle_status_local(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
                         std::ostream &err) {

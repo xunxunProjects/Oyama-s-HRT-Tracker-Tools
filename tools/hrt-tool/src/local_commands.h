@@ -24,6 +24,10 @@ nlohmann::json build_pk_view(
     const std::vector<std::pair<std::string, double>> &offsets, std::ostream &err);
 
 std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags);
+double parse_time_hours(const std::string &text, bool utc);
+int parse_ester(const std::string &drug);
+int parse_route(const std::string &route);
+double parse_dose_mg(const std::string &text);
 
 /* `status` from a local snapshot (or the --snapshot file). */
 int handle_status_local(const ParsedArgs &parsed, std::istream &in, std::ostream &out,

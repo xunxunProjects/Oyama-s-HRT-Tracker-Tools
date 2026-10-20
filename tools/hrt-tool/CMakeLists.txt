@@ -36,6 +36,7 @@ add_custom_command(
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
 add_library(hrtcpp STATIC
+    src/add_interactive.cpp
     src/api_live.cpp
     src/backup_envelope.cpp
     src/cli.cpp
@@ -139,6 +140,10 @@ if(BUILD_TESTING)
     add_executable(status_test tests/status_test.cpp)
     target_link_libraries(status_test PRIVATE hrtcpp)
     add_test(NAME status COMMAND status_test)
+
+    add_executable(add_interactive_test tests/add_interactive_test.cpp)
+    target_link_libraries(add_interactive_test PRIVATE hrtcpp)
+    add_test(NAME add_interactive COMMAND add_interactive_test)
 
     add_executable(crypto_test tests/crypto_test.cpp)
     target_link_libraries(crypto_test PRIVATE hrtcore)

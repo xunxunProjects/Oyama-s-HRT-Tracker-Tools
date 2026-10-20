@@ -1,5 +1,6 @@
 #include "commands.h"
 
+#include "add_interactive.h"
 #include "api.h"
 #include "backup_envelope.h"
 #include "command_flags.h"
@@ -1063,6 +1064,12 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
     if (unlocked.session().data.token.empty()) {
         throw ApiAuthError("NOT_LOGGED_IN", "log in first; run hrt-tool login");
     }
+    const auto progress = [context](const std::string &phase) {
+        if (context != nullptr && context->progress) {
+            context->progress(phase);
+        }
+    };
+    progress("trust");
     const std::string server = authenticated_server(parsed, unlocked.session().data);
     const std::string trusted_pin =
         ensure_trust(unlocked, parsed, in, err, server);
@@ -1073,6 +1080,7 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
 
     const std::array<uint8_t, 32> key =
         cloud_key_for(unlocked, parsed, in, out);
+    progress("fetching snapshot");
     std::optional<Snapshot> current = client->latest_snapshot();
     const nlohmann::json remote =
         current.has_value() ? payload_from_snapshot(*current, key)
@@ -1080,6 +1088,7 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
 
     std::ostringstream captured;
     std::optional<nlohmann::json> updated;
+    progress("applying");
     if (parsed.command == "add") {
         updated = apply_add(parsed, remote, captured, err);
     } else if (parsed.command == "dose") {
@@ -1099,6 +1108,7 @@ int command_mutate_remote(const ParsedArgs &parsed, std::istream &in,
 
     /* Print the mutation line only after the write succeeds, so a failed push
        never looks like a saved change. */
+    progress("uploading");
     const PushResult pushed =
         push_sync_payload(*client, key, *updated, err, current);
     out << captured.str();
@@ -1804,6 +1814,17 @@ int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
         if (Vault::exists(paths.vault_file)) {
             return command_look_remote(parsed, in, out, err, context);
         }
+    }
+
+    const bool interactive_dose =
+        parsed.command == "add" && has_argument(parsed.command_args, "dose") &&
+        !has_argument(parsed.command_args, "--drug") &&
+        !has_argument(parsed.command_args, "--time") &&
+        !has_argument(parsed.command_args, "--measurement") &&
+        !has_argument(parsed.command_args, "--dose") &&
+        !has_argument(parsed.command_args, "--route");
+    if (interactive_dose) {
+        return handle_add_interactive(parsed, in, out, err, context);
     }
 
     const bool live_mutation = parsed.command == "add" ||
