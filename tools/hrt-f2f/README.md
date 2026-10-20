@@ -148,5 +148,17 @@ GOPROXY=off go test -count=1 ./...
 
 The suite covers key generation, locking, multi-recipient encryption, signing,
 tamper rejection, keyring splitting/deduplication, file permissions, the HTTP
-client, one-time code login, and GnuPG interoperability. GnuPG tests are skipped when `gpg` is not
-installed.
+client, one-time code login, and GnuPG interoperability. GnuPG tests are
+skipped when `gpg` is not installed.
+
+## Release builds
+
+```sh
+tools/hrt-f2f/scripts/build-release.sh 0.1.0 /path/to/output
+```
+
+The script runs the tests, cross-compiles Linux and Windows binaries for
+amd64 and 386 with `CGO_ENABLED=0`, writes `BUILD_INFO.txt`, per-binary
+`SHA512SUMS`/`MD5SUMS`, and a `hrt-f2f-<version>-multiarch.tar.xz` with
+archive-level `.sha512` and `.md5` files. Detached signatures are made by the
+release owner after the build.
