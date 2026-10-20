@@ -34,13 +34,6 @@ std::string error_code(const nlohmann::json &body) {
     return "HTTP_ERROR";
 }
 
-std::string error_message(const nlohmann::json &body) {
-    if (body.is_object() && body.contains("message") && body.at("message").is_string()) {
-        return body.at("message").get<std::string>();
-    }
-    return "request failed";
-}
-
 bool is_device_auth_error(const std::string &code) {
     return code == "CERT_REQUIRED" || code == "CERT_INVALID" ||
            code == "NOT_AUTHORIZED";

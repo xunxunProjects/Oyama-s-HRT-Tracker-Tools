@@ -7,11 +7,43 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(GNUInstallDirs)
+
+option(HRT_TOOL_ENABLE_F2F "Build the Go F2F bridge" ON)
+option(HRT_TOOL_ENABLE_WARNINGS "Enable compiler warnings" ON)
+option(HRT_TOOL_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
+option(HRT_TOOL_ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
+
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
+
+function(hrt_tool_warnings target)
+    if(NOT HRT_TOOL_ENABLE_WARNINGS)
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options("${target}" PRIVATE /W4)
+        if(HRT_TOOL_ENABLE_WERROR)
+            target_compile_options("${target}" PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options("${target}" PRIVATE -Wall -Wextra -Wpedantic)
+        if(HRT_TOOL_ENABLE_WERROR)
+            target_compile_options("${target}" PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
+if(HRT_TOOL_ENABLE_SANITIZERS)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "HRT_TOOL_ENABLE_SANITIZERS requires GCC or Clang")
+    endif()
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 add_library(hrtcore STATIC
     native/core/version.c
@@ -35,26 +67,36 @@ add_custom_command(
 )
 add_custom_target(hrtprint_build ALL DEPENDS ${HRTPRINT_LIB})
 
-find_program(GO_EXECUTABLE go REQUIRED)
-set(HRTF2F_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../hrt-f2f)
-set(HRTF2F_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/hrtf2f)
-set(HRTF2F_LIB ${HRTF2F_BUILD_DIR}/libhrtf2f.a)
-set(HRTF2F_HEADER ${HRTF2F_BUILD_DIR}/libhrtf2f.h)
-file(GLOB HRTF2F_GO_SOURCES CONFIGURE_DEPENDS ${HRTF2F_DIR}/*.go)
-add_custom_command(
-    OUTPUT ${HRTF2F_LIB} ${HRTF2F_HEADER}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HRTF2F_BUILD_DIR}
-    COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
-            ${GO_EXECUTABLE} build -buildmode=c-archive -trimpath
-            -o ${HRTF2F_LIB} .
-    DEPENDS ${HRTF2F_GO_SOURCES} ${HRTF2F_DIR}/go.mod ${HRTF2F_DIR}/go.sum
-    WORKING_DIRECTORY ${HRTF2F_DIR}
-    COMMENT "Building the Go F2F library"
-    VERBATIM
-)
-add_custom_target(hrtf2f_build DEPENDS ${HRTF2F_LIB} ${HRTF2F_HEADER})
-set_source_files_properties(src/f2f_bridge.cpp PROPERTIES
-    OBJECT_DEPENDS ${HRTF2F_HEADER})
+set(HRT_F2F_SOURCES src/f2f_bridge_stub.cpp)
+set(HRTF2F_INCLUDE_DIR "")
+set(HRTF2F_LINK_LIB "")
+set(HRTF2F_DEPENDENCY "")
+if(HRT_TOOL_ENABLE_F2F)
+    find_program(GO_EXECUTABLE go REQUIRED)
+    set(HRTF2F_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../hrt-f2f)
+    set(HRTF2F_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/hrtf2f)
+    set(HRTF2F_LIB ${HRTF2F_BUILD_DIR}/libhrtf2f.a)
+    set(HRTF2F_HEADER ${HRTF2F_BUILD_DIR}/libhrtf2f.h)
+    file(GLOB HRTF2F_GO_SOURCES CONFIGURE_DEPENDS ${HRTF2F_DIR}/*.go)
+    add_custom_command(
+        OUTPUT ${HRTF2F_LIB} ${HRTF2F_HEADER}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${HRTF2F_BUILD_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
+                ${GO_EXECUTABLE} build -buildmode=c-archive -trimpath
+                -o ${HRTF2F_LIB} .
+        DEPENDS ${HRTF2F_GO_SOURCES} ${HRTF2F_DIR}/go.mod ${HRTF2F_DIR}/go.sum
+        WORKING_DIRECTORY ${HRTF2F_DIR}
+        COMMENT "Building the Go F2F library"
+        VERBATIM
+    )
+    add_custom_target(hrtf2f_build DEPENDS ${HRTF2F_LIB} ${HRTF2F_HEADER})
+    set_source_files_properties(src/f2f_bridge.cpp PROPERTIES
+        OBJECT_DEPENDS ${HRTF2F_HEADER})
+    set(HRT_F2F_SOURCES src/f2f_bridge.cpp)
+    set(HRTF2F_INCLUDE_DIR ${HRTF2F_BUILD_DIR})
+    set(HRTF2F_LINK_LIB ${HRTF2F_LIB})
+    set(HRTF2F_DEPENDENCY hrtf2f_build)
+endif()
 
 add_library(hrtcpp STATIC
     src/add_interactive.cpp
@@ -69,7 +111,7 @@ add_library(hrtcpp STATIC
     src/encrypted_file.cpp
     src/entropy.cpp
     src/exit_codes.cpp
-    src/f2f_bridge.cpp
+    ${HRT_F2F_SOURCES}
     src/file_io.cpp
     src/format.cpp
     src/http.cpp
@@ -96,18 +138,23 @@ add_library(hrtcpp STATIC
 )
 target_include_directories(hrtcpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${HRTF2F_BUILD_DIR}
+    ${HRTF2F_INCLUDE_DIR}
 )
 target_link_libraries(hrtcpp PUBLIC
     hrtcore
     nlohmann_json::nlohmann_json
     ${HRTPRINT_LIB}
-    ${HRTF2F_LIB}
+    ${HRTF2F_LINK_LIB}
     CURL::libcurl
     OpenSSL::SSL
     OpenSSL::Crypto
 )
-add_dependencies(hrtcpp hrtprint_build hrtf2f_build)
+add_dependencies(hrtcpp hrtprint_build)
+if(HRTF2F_DEPENDENCY)
+    add_dependencies(hrtcpp ${HRTF2F_DEPENDENCY})
+endif()
+hrt_tool_warnings(hrtcore)
+hrt_tool_warnings(hrtcpp)
 
 add_executable(hrt-tool src/main.cpp)
 target_link_libraries(hrt-tool PRIVATE
@@ -118,6 +165,18 @@ target_link_libraries(hrt-tool PRIVATE
     m
 )
 add_dependencies(hrt-tool hrtprint_build)
+hrt_tool_warnings(hrt-tool)
+
+install(TARGETS hrt-tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES docs/PRIVACY_ENVIRONMENTS.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+add_custom_target(update
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target hrt-tool
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
+    COMMENT "Rebuilding and reinstalling hrt-tool"
+    VERBATIM
+)
 
 include(CTest)
 if(BUILD_TESTING)
