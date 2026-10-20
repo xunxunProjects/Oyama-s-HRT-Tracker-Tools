@@ -98,8 +98,8 @@ Stable error codes: `BAD_FRAME`, `FRAME_TOO_LARGE`, `UNKNOWN_OP`,
 
 | op | client cert | purpose |
 | --- | --- | --- |
-| `pair.start` | no | begin a device pairing request; sends code SHA-256, device public key, device name, client version |
-| `pair.poll` | no | poll with request id + poll secret; returns pending / approved / denied / expired / held |
+| `pair.start` | no | begin a device pairing request; sends username, code SHA-256, self-signed device certificate, device name, client version |
+| `pair.poll` | no | poll with request id + poll secret; returns pending / approved / denied / expired (a held request stays indistinguishable from pending) |
 | `pair.deny` | web only | web-side denial (not a raw op) |
 | `request` | yes | forward an allowlisted HTTP request to the web app |
 | `ping` | optional | liveness; returns server time and protocol version |
@@ -139,15 +139,24 @@ Rules:
 
 - The CLI generates 64 random bytes with `RAND_bytes`, prints 128 lowercase
   hex characters, and keeps them in memory. Only SHA-256 is sent.
-- The web page shows the server-observed IP, country (Cloudflare metadata or
-  a local GeoIP database), device label, and public-key fingerprint.
-- Approval requires the code; adding a trusted IP additionally requires the
-  web account password.
-- The poll secret is independent of the code and is not displayed.
+- `pair.start` includes the lowercase username the CLI is trying to sign in
+  as. The service associates pending requests and abuse counters with that
+  name so the account owner sees only their own requests and the one-hour
+  hold can target the spammed account. The response never says whether the
+  account exists.
+- The web page shows the server-observed IP, country when the deployment
+  has a local GeoIP source, device label, certificate fingerprint, and time.
+- Approval requires the code and a web session whose username matches the
+  request; adding a trusted IP additionally requires the web account
+  password.
+- The poll secret is independent of the code and is not displayed. It is
+  stored as a hash, like the code.
 - The token is returned only after the code hash matches and the web
-  approval exists. It is bound to the account, origin, and device key.
-- A wrong code, denial, expiry, or hold returns a uniform failure; it never
-  reveals which check failed.
+  approval exists. It is bound to the account, origin, and device
+  certificate fingerprint.
+- A wrong code, denial, expiry, or hold returns a uniform failure; a held
+  request is indistinguishable from a pending one until it expires, so the
+  attacker cannot learn that the account is in a hold.
 - The CLI's local 60-second login-failure pause applies to repeated pairing
   failures. The server's rate limits remain authoritative.
 

@@ -98,15 +98,21 @@ States: `initiated` → `web_pending` → `approved` → `token_issued`;
 
 ```json
 {
+  "username": "<the account the CLI is signing in as>",
   "code_hash": "<hex sha256 of the 128-hex code>",
-  "device_public_key": "<public key>",
+  "device_certificate": "<self-signed device certificate, PEM>",
   "device_name": "<user-visible label, bounded>",
   "client_version": "hrt-tool/0.1.0"
 }
 ```
 
-The server records the connection source IP (from the platform's trusted
-header, never a client-supplied value) and the country code. It returns:
+The raw adapter records the connection source IP (from the socket or the
+configured trusted proxy chain, never a client-supplied header) and
+forwards it on the internal service call. The web app associates the
+request with the lowercased username for the account owner's approval
+list and the one-hour abuse hold, without revealing whether the account
+exists. Country is shown when the deployment has a local GeoIP source. It
+returns:
 
 ```json
 {
@@ -124,7 +130,7 @@ characters (`openssl rand -hex 128`). It is held in memory only.
 ### 5.2 Web approval
 
 The account owner, already signed in, opens Account → Security and sees the
-pending request: device name, public-key fingerprint, server-observed IP,
+pending request: device name, certificate fingerprint, server-observed IP,
 country, and time. The page requires:
 
 1. an explicit **Approve** action (CSRF-protected);
@@ -143,7 +149,7 @@ The web page may offer **Deny**. Denial and expiry invalidate the request.
 `POST /hrt/pair/poll` with `request_id` and `poll_secret` returns
 `pending`, `approved`, `denied`, `expired`, or `held`. On approval it
 returns a token, the user id, and the username. The token is bound to the
-origin and the device public key. `hrt://` requests are additionally bound
+origin and the device certificate fingerprint. `hrt://` requests are additionally bound
 to the device certificate by the transport. Over the HTTPS fallback the
 token remains origin-bound; request proof-of-possession can be added later
 without changing the pairing flow.
@@ -217,7 +223,7 @@ Proposed tables (names may change in implementation):
 
 | Table | Fields | Retention |
 | --- | --- | --- |
-| `hrt_pair_requests` | id, account id, device key id, code hash, encrypted source IP, country code, status, timestamps | 12 hours; code hash deleted on approval/expiry |
+| `hrt_pair_requests` | id, account username/id, device certificate fingerprint, code hash, encrypted source IP, country code, status, timestamps | 12 hours; code hash deleted on approval/expiry |
 | `hrt_devices` | account id, public-key id, label, created, last seen, expires, revoked | until revoked or unused-expiry; default 90 days, disposable shorter |
 | `hrt_holds` | account id, hold until, blocked count, first/last blocked | 1 hour hold; aggregate count at most 24 hours |
 | `hrt_trusted_ips` | account id, encrypted address/prefix, label, created, last used | until removed or 90 days |
