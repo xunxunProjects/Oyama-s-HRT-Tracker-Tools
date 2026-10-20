@@ -254,6 +254,14 @@ The server implementation contract (schema, seat rules, endpoints, and the
 current escrow/key-generation boundary) lives in the main repository at
 `docs/hrt-protocol/F2F_SERVICE.md`.
 
+Implemented so far: 100-seat cohorts with permanent tombstones, public-key
+registration/rotation/revocation, member listing, operator-provisioned
+cohort escrow keys, and a member-only keyring export. The keyring is the
+standard-GnuPG client path: members generate and hold their own private
+keys, import the downloaded public keyring, verify fingerprints in person,
+and encrypt/decrypt locally. The server never stores a user's private key.
+The dedicated CLI/browser key-generation flow remains future work.
+
 ### 9.1 Trust model
 
 - Every user generates their **own** OpenPGP key pair on the client. The
