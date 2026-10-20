@@ -267,6 +267,11 @@ decrypts the records to stdout. Plaintext logs are never written.
 
 ## Security model
 
+People running the tool in Qubes, Whonix, Tails, or another disposable VM
+should read [`docs/PRIVACY_ENVIRONMENTS.md`](docs/PRIVACY_ENVIRONMENTS.md):
+it covers persistent vaults, per-install device keys, proxy DNS, the
+`hrt://` transport, the HTTPS fallback warning, and the non-guarantees.
+
 - All local state is encrypted at rest: token, user id, device pass, cached
   cloud key, server/proxy settings, trust pins, and the OpSec acknowledgement.
 - Plaintext is written only to stdout. `export --out FILE` writes an encrypted

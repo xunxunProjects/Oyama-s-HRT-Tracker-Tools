@@ -34,6 +34,10 @@
   Environment proxy variables are ignored unless configured explicitly.
 - Redirects are refused, so a `307`/`308` cannot replay the login body to
   another origin.
+- Added `docs/PRIVACY_ENVIRONMENTS.md` for Qubes, Whonix, and Tails: random
+  per-install device keys, disposable-VM device handling, proxy DNS rules,
+  the hrt/HTTPS fallback warning, data retention, and the security
+  non-guarantees.
 
 ## 0.1.0 — 2026-10-19 (pre-release)
 
