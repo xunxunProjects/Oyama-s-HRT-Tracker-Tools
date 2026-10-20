@@ -260,7 +260,15 @@ cohort escrow keys, and a member-only keyring export. The keyring is the
 standard-GnuPG client path: members generate and hold their own private
 keys, import the downloaded public keyring, verify fingerprints in person,
 and encrypt/decrypt locally. The server never stores a user's private key.
-The dedicated CLI/browser key-generation flow remains future work.
+
+The dedicated client is `tools/hrt-f2f` in the Tools repository. It can
+generate a passphrase-locked key pair, register the public key, pull the
+cohort keyring, merge/list keyrings, encrypt to multiple members plus the
+escrow key, sign, and decrypt with an optional pinned signer. It uses the
+normal web session token from a 0600 file for the F2F API, accepts only a
+`socks5h://` proxy, and is interoperable with GnuPG in both directions
+(covered by its test suite). Browser-side key generation remains future
+work and is not the recommended high-threat path.
 
 ### 9.1 Trust model
 

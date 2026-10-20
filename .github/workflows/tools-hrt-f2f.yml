@@ -1,0 +1,59 @@
+name: Tools hrt-f2f
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "tools/hrt-f2f/**"
+      - ".github/workflows/tools-hrt-f2f.yml"
+  pull_request:
+    paths:
+      - "tools/hrt-f2f/**"
+      - ".github/workflows/tools-hrt-f2f.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    defaults:
+      run:
+        working-directory: tools/hrt-f2f
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/hrt-f2f/go.mod
+          cache: false
+
+      - name: Show Go version
+        run: go version
+
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 -v ./...
+
+      - name: go build
+        run: go build ./...

@@ -33,6 +33,12 @@ logs, URL/trust policy, the C PK engine validated against the website, cloud
 snapshot decryption, and local `look`/`add`/`dose`/`lab`/`weight`/`export`/
 `import` commands. The live server client is M3/M4.
 
+The third tool, [`hrt-f2f`](tools/hrt-f2f/README.md), is the dedicated
+face-to-face keyring CLI. It generates member-owned OpenPGP keys, uploads only
+public keys, downloads the cohort keyring, and encrypts/decrypts locally.
+Private keys are never sent to the server. It is separate from both the
+cold-backup container and the account transport.
+
 ## Download
 
 See the [latest release](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/releases).
