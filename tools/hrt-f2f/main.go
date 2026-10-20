@@ -455,10 +455,15 @@ func cmdKeyring(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		/* Validate before writing: a poisoned or truncated keyring must not
+		   replace a known-good local file. */
+		infos, err := listKeyring(keyring)
+		if err != nil {
+			return fmt.Errorf("server returned an invalid keyring: %w", err)
+		}
 		if err := writeOutput(*output, []byte(keyring), *force); err != nil {
 			return err
 		}
-		infos, _ := listKeyring(keyring)
 		fmt.Fprintf(stdout, "cohort %s, seat %d, %d public keys\n",
 			status.Cohort.ID, status.Seat, len(infos))
 		fmt.Fprintf(stdout, "output: %s\n", *output)

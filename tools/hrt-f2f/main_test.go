@@ -97,6 +97,41 @@ func TestCLIKeygenEncryptDecrypt(t *testing.T) {
 	}
 }
 
+func TestKeyringPullRejectsInvalidServerKeyring(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	output := filepath.Join(dir, "cohort.asc")
+	writeTestFile(t, tokenFile, []byte(testToken+"\n"), 0o600)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/f2f/status" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"registered": true,
+				"cohort": map[string]any{
+					"id": "cohort-1", "state": "active", "memberCount": 1, "totalSeats": 1,
+				},
+				"seat": 1,
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("this is not an armored keyring"))
+	}))
+	defer server.Close()
+
+	code, _, stderr := runCLI(t, "keyring", "pull",
+		"--server", server.URL,
+		"--token-file", tokenFile,
+		"--out", output,
+	)
+	if code == 0 || !strings.Contains(stderr, "invalid keyring") {
+		t.Fatalf("invalid keyring was accepted: code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("invalid keyring was written to disk (err=%v)", err)
+	}
+}
+
 func TestCLINetworkCommands(t *testing.T) {
 	dir := t.TempDir()
 	passFile := filepath.Join(dir, "pass")
