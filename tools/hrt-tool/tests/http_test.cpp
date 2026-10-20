@@ -45,9 +45,12 @@ int main() {
     CHECK_THROWS(validate_server_url(parse_url("ftp://example.com")), ToolError);
 
     validate_proxy_url("socks5h://127.0.0.1:9050");
-    validate_proxy_url("socks5://127.0.0.1:4447");
-    validate_proxy_url("http://127.0.0.1:8080");
-    validate_proxy_url("https://proxy.example:8443");
+    validate_proxy_url("socks5h://proxy.example:1080");
+    /* Only socks5h guarantees that the proxy, not the local resolver, resolves
+       the destination name. */
+    CHECK_THROWS(validate_proxy_url("socks5://127.0.0.1:4447"), ToolError);
+    CHECK_THROWS(validate_proxy_url("http://127.0.0.1:8080"), ToolError);
+    CHECK_THROWS(validate_proxy_url("https://proxy.example:8443"), ToolError);
     CHECK_THROWS(validate_proxy_url("ftp://127.0.0.1:21"), ToolError);
     CHECK_THROWS(validate_proxy_url("socks5h://"), ToolError);
 

@@ -791,20 +791,22 @@ int main() {
         CHECK_EQ(bad_onion.code, 2);
         CHECK(contains(bad_onion.err, "ONION_ADDRESS"));
 
-        /* socks5:// resolves DNS locally, so it must be refused for an onion
-           host before any request is made. */
+        /* Only socks5h may be configured: socks5 resolves DNS locally. */
         const RunResult set_local_dns = run(
             {"config", "set", "proxy", "socks5://127.0.0.1:9050",
              "--vault-password-stdin", "--config-dir", temp.path().string()},
             kPasswordLine);
-        CHECK_EQ(set_local_dns.code, 0);
-        const RunResult local_dns = run(
-            {"login", "--server", "http://" + onion, "--username", "Alice",
-             "--timeout", "3", "--vault-password-stdin",
+        CHECK_EQ(set_local_dns.code, 2);
+        CHECK(contains(set_local_dns.err, "PROXY_URL"));
+        CHECK(contains(set_local_dns.err, "socks5h"));
+
+        const RunResult override_local_dns = run(
+            {"login", "--server", "https://example.com", "--username", "Alice",
+             "--proxy", "http://127.0.0.1:8080", "--vault-password-stdin",
              "--config-dir", temp.path().string()},
             kPasswordLine);
-        CHECK_EQ(local_dns.code, 2);
-        CHECK(contains(local_dns.err, "PROXY_DNS"));
+        CHECK_EQ(override_local_dns.code, 2);
+        CHECK(contains(override_local_dns.err, "PROXY_URL"));
 
         const RunResult set_proxy = run(
             {"config", "set", "proxy", "socks5h://127.0.0.1:9050",

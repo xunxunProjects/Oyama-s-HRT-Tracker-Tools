@@ -400,10 +400,16 @@ void validate_server_url(const Url &url) {
 
 void validate_proxy_url(const std::string &proxy) {
     const Url url = parse_url(proxy);
-    if (url.scheme != "socks5" && url.scheme != "socks5h" && url.scheme != "http" &&
-        url.scheme != "https") {
+    /*
+     * Only socks5h resolves the destination name at the proxy. socks5 and
+     * HTTP(S) proxies can fall back to the local resolver, which leaks the
+     * host name this tool exists to protect, so they are refused instead of
+     * being accepted with a weaker meaning.
+     */
+    if (url.scheme != "socks5h") {
         throw ToolError(ExitCode::Usage, "PROXY_URL",
-                        "proxy must use socks5h://, socks5://, http://, or https://");
+                        "proxy must use socks5h:// so DNS is resolved by the "
+                        "proxy; socks5, http, and https proxies are refused");
     }
     if (url.host.empty()) {
         throw ToolError(ExitCode::Usage, "PROXY_URL", "proxy URL has no host");
@@ -585,19 +591,10 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     }
 
     if (!options.proxy.empty()) {
-        const Url proxy = parse_url(options.proxy);
         curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
         /* Do not let no_proxy/NO_PROXY bypass an explicitly configured proxy. */
         curl_easy_setopt(curl, CURLOPT_NOPROXY, "");
-        if (proxy.scheme == "socks5h") {
-            curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME);
-        } else if (proxy.scheme == "socks5") {
-            curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5);
-        } else if (proxy.scheme == "https") {
-            curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTPS);
-        } else {
-            curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
-        }
+        curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME);
     } else {
         /* Routing is explicit: an environment http_proxy/ALL_PROXY must not
            silently carry this tool's traffic, and a .onion address without a

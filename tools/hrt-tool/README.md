@@ -315,13 +315,17 @@ it covers persistent vaults, per-install device keys, proxy DNS, the
   yet crash-durable (`fsync` is POSIX-only here).
 - Tor/I2P are reached through `config set proxy socks5h://127.0.0.1:9050`
   (Tor) or `socks5h://127.0.0.1:4447` (I2P). `socks5h` keeps DNS at the
-  proxy. A missing proxy produces `TOR_PROXY_MISSING`/`I2P_PROXY_MISSING`
-  with the exact configuration command to run; the check happens before any
-  DNS lookup, so the hidden-service name never reaches the local resolver.
-  A non-`socks5h` proxy is refused with `PROXY_DNS` for hidden services. A
-  failed resolution produces `TOR_PROXY_FAILED`/`I2P_PROXY_FAILED` with the
-  configured proxy and the conventional address. Only Tor v3 onion names
-  (56 base32 characters) are accepted.
+  proxy. Only `socks5h://` is accepted as a proxy; `socks5://`, `http://`,
+  and `https://` proxies are refused with `PROXY_URL`, because they cannot
+  guarantee that the destination name is resolved by the proxy. A missing
+  proxy produces `TOR_PROXY_MISSING`/`I2P_PROXY_MISSING` with the exact
+  configuration command to run; the check happens before any DNS lookup, so
+  the hidden-service name never reaches the local resolver. A non-`socks5h`
+  proxy saved by an older build is refused with `PROXY_DNS` for hidden
+  services. A failed resolution produces
+  `TOR_PROXY_FAILED`/`I2P_PROXY_FAILED` with the configured proxy and the
+  conventional address. Only Tor v3 onion names (56 base32 characters) are
+  accepted.
 - Routing is explicit: the tool ignores `http_proxy`, `https_proxy`, and
   `ALL_PROXY` from the environment, and `no_proxy` cannot bypass an
   explicitly configured proxy. A `.onion` or `.i2p` address without a

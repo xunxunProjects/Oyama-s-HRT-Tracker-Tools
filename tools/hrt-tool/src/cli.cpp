@@ -212,6 +212,8 @@ void print_help(std::ostream &out) {
         << "Tor/I2P:\n"
         << "  Tor: hrt-tool config set proxy socks5h://127.0.0.1:9050\n"
         << "  I2P: hrt-tool config set proxy socks5h://127.0.0.1:4447\n"
+        << "  Only socks5h:// is accepted, so the proxy resolves every name;\n"
+        << "  socks5, http, and https proxies are refused.\n"
         << "  .onion host names are v3: 56 base32 characters plus .onion.\n\n"
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
