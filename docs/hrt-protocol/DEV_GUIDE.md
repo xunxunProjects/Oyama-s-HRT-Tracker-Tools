@@ -52,10 +52,13 @@ F2F/GPG service (separate advanced component)
 Each frame:
 
 ```
-u32 big-endian length (1 .. 1,048,576)
+u32 big-endian length (1 .. 25,165,824)
 JSON object (UTF-8)
 ```
 
+The 24 MiB cap accommodates the web API's 16 MiB JSON body after base64
+expansion (4/3) plus envelope overhead. The server bounds concurrent
+connections separately so the cap cannot multiply into unbounded memory.
 There is no compression and no pipelining. A connection is
 request/response; the client may send the next frame after reading the
 response. Request ids are client-generated and echoed; duplicate ids within

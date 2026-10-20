@@ -32,7 +32,7 @@ std::string encode_hrt_frame(const nlohmann::json &message) {
     const std::string payload = message.dump();
     if (payload.size() > kHrtMaxFrameBytes) {
         throw ToolError(ExitCode::Data, "FRAME_TOO_LARGE",
-                        "hrt frame exceeds 1 MiB");
+                        "hrt frame exceeds 24 MiB");
     }
     const uint32_t length = static_cast<uint32_t>(payload.size());
     std::string frame;
@@ -57,7 +57,7 @@ nlohmann::json decode_hrt_frame(const std::string &frame) {
         static_cast<uint32_t>(static_cast<unsigned char>(frame[3]));
     if (length > kHrtMaxFrameBytes) {
         throw ToolError(ExitCode::Data, "FRAME_TOO_LARGE",
-                        "hrt frame exceeds 1 MiB");
+                        "hrt frame exceeds 24 MiB");
     }
     if (frame.size() - 4 != length) {
         throw ToolError(ExitCode::Data, "BAD_FRAME",

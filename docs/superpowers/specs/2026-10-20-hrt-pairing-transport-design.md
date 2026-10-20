@@ -356,8 +356,9 @@ protocol adapter** in front of the existing self-hosted web application:
   length followed by a JSON object with a request id, an operation
   (`pair.start`, `pair.poll`, `request`, `ping`), and a bounded body. `request`
   is allowlisted to `/api/tool/v1/*` and a small header set; the raw server
-  is not a general forward proxy. Frames are capped (1 MiB) with per-
-  connection timeouts and request-id idempotency.
+  is not a general forward proxy. Frames are capped (24 MiB, enough for a
+  16 MiB JSON body after base64 expansion) with per-connection timeouts,
+  bounded connections, and request-id idempotency.
 - **Pairing path.** `pair.start` and `pair.poll` are the only operations
   allowed without a client certificate. The raw server forwards them to
   the web app's internal `/api/tool/v1/hrt/*` endpoints over loopback,

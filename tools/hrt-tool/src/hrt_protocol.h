@@ -4,8 +4,10 @@
 #include <nlohmann/json.hpp>
 #include <string>
 
-/* hrt/1 frame: u32 big-endian payload length, then one JSON object. */
-constexpr size_t kHrtMaxFrameBytes = 1024 * 1024;
+/* hrt/1 frame: u32 big-endian payload length, then one JSON object.
+   Sized for the web API's 16 MiB JSON bodies after base64 expansion, plus
+   envelope overhead; the server bounds concurrent connections separately. */
+constexpr size_t kHrtMaxFrameBytes = 24 * 1024 * 1024;
 
 /* Serializes and length-prefixes one envelope. The envelope must be an
    object with a non-empty string id; op/status/error semantics are checked
