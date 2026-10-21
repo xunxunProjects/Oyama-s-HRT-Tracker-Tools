@@ -182,7 +182,7 @@ build_target() {
 
     echo "build-release: building"
     if [ ${#build_env[@]} -gt 0 ]; then
-        "${build_env[@]}" cmake --build "$build_dir" --parallel
+        env "${build_env[@]}" cmake --build "$build_dir" --parallel
     else
         cmake --build "$build_dir" --parallel
     fi

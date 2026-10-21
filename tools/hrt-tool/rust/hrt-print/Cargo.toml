@@ -9,3 +9,8 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 serde_json = "1"
+
+# The printer has no recovery path, and the 32-bit MinGW toolchain in the
+# release environment ships no unwinder library.
+[profile.release]
+panic = "abort"

@@ -65,11 +65,18 @@ With these flags the cross curl depends only on zlib and OpenSSL, not on
 nghttp2/nghttp3/ICU/GnuTLS.
 
 Windows link requirements are added by the toolchain files: `ws2_32`,
-`crypt32`, `bcrypt`, `ntdll`, and `userenv`. Go's c-archive also needs
-`winmm`; Rust's static library needs the native libraries reported by:
+`crypt32`, `bcrypt`, `advapi32`, `iphlpapi`, `ntdll`, `userenv`, and `winmm`.
+The curl headers are compiled with `CURL_STATICLIB`, and `FindCURL` is
+bypassed so the static `libcurl.a` is linked instead of `libcurl.dll.a`.
+
+The 32-bit MinGW toolchain ships no DWARF unwinder. Rust's
+`i686-pc-windows-gnu` std references the DWARF resume/raise entry points, so
+`src/mingw32_unwind_stub.c` provides them as aborts; the Rust printer is
+built with `panic = "abort"` and has no unwinding path. Rust's static library
+needs the native libraries reported by:
 
 ```sh
-cargo rustc --release --target x86_64-pc-windows-gnu -- --print native-static-libs
+cargo rustc --release --target i686-pc-windows-gnu -- --print native-static-libs
 ```
 
 ## Build commands

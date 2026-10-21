@@ -28,6 +28,35 @@ find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
+# On Windows, link the static libcurl path directly. FindCURL prefers the
+# import library (libcurl.dll.a), which would make the release depend on a
+# DLL that is not shipped.
+if(WIN32 AND CURL_LIBRARY)
+    set(HRT_CURL_TARGET "${CURL_LIBRARY}")
+    set(HRT_CURL_INCLUDE "${CURL_INCLUDE_DIR}")
+    set(HRT_CURL_STATIC TRUE)
+else()
+    set(HRT_CURL_TARGET CURL::libcurl)
+    set(HRT_CURL_INCLUDE "")
+endif()
+
+# nlohmann/json is header-only. Cross builds must not add the host
+# /usr/include to the search path: doing so lets the target's libstdc++
+# __has_include pick up host glibc headers. Stage only the nlohmann tree.
+if(CMAKE_CROSSCOMPILING)
+    get_target_property(HRT_NLOHMANN_INCLUDE nlohmann_json::nlohmann_json
+        INTERFACE_INCLUDE_DIRECTORIES)
+    list(GET HRT_NLOHMANN_INCLUDE 0 HRT_NLOHMANN_INCLUDE_DIR)
+    set(HRT_HOST_INCLUDE ${CMAKE_BINARY_DIR}/host-include)
+    file(MAKE_DIRECTORY ${HRT_HOST_INCLUDE}/nlohmann)
+    file(COPY ${HRT_NLOHMANN_INCLUDE_DIR}/nlohmann/
+         DESTINATION ${HRT_HOST_INCLUDE}/nlohmann)
+    set(HRT_NLOHMANN_TARGET "")
+else()
+    set(HRT_HOST_INCLUDE "")
+    set(HRT_NLOHMANN_TARGET nlohmann_json::nlohmann_json)
+endif()
+
 function(hrt_tool_warnings target)
     if(NOT HRT_TOOL_ENABLE_WARNINGS)
         return()
@@ -129,6 +158,11 @@ if(HRT_TOOL_ENABLE_F2F)
     set(HRTF2F_DEPENDENCY hrtf2f_build)
 endif()
 
+set(HRT_PLATFORM_SOURCES "")
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    list(APPEND HRT_PLATFORM_SOURCES src/mingw32_unwind_stub.c)
+endif()
+
 add_library(hrtcpp STATIC
     src/add_interactive.cpp
     src/api_live.cpp
@@ -170,19 +204,26 @@ add_library(hrtcpp STATIC
 target_include_directories(hrtcpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${HRTF2F_INCLUDE_DIR}
+    ${HRT_CURL_INCLUDE}
 )
+if(HRT_HOST_INCLUDE)
+    target_include_directories(hrtcpp PRIVATE ${HRT_HOST_INCLUDE})
+endif()
 target_compile_definitions(hrtcpp PUBLIC
     HRT_TOOL_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     HRT_TOOL_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     HRT_TOOL_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     HRT_TOOL_F2F_ENABLED=${HRT_F2F_ENABLED_VALUE}
 )
+if(HRT_CURL_STATIC)
+    target_compile_definitions(hrtcpp PUBLIC CURL_STATICLIB)
+endif()
 target_link_libraries(hrtcpp PUBLIC
     hrtcore
-    nlohmann_json::nlohmann_json
+    ${HRT_NLOHMANN_TARGET}
     ${HRTPRINT_LIB}
     ${HRTF2F_LINK_LIB}
-    CURL::libcurl
+    ${HRT_CURL_TARGET}
     OpenSSL::SSL
     OpenSSL::Crypto
 )
@@ -194,14 +235,19 @@ hrt_tool_warnings(hrtcore)
 hrt_tool_warnings(hrtcpp)
 
 add_executable(hrt-tool src/main.cpp)
+target_sources(hrt-tool PRIVATE ${HRT_PLATFORM_SOURCES})
 target_link_libraries(hrt-tool PRIVATE
     hrtcpp
-    CURL::libcurl
+    ${HRT_CURL_TARGET}
     Threads::Threads
 )
 if(WIN32)
+    # Repeat the static archives and system libraries at the end: GNU ld
+    # resolves them in order, and the Go/Rust archives are pulled in through
+    # hrtcpp's interface.
     target_link_libraries(hrt-tool PRIVATE
-        ws2_32 crypt32 bcrypt ntdll userenv winmm z)
+        hrtcore ${HRTPRINT_LIB} ${HRTF2F_LINK_LIB}
+        ws2_32 crypt32 bcrypt advapi32 iphlpapi ntdll userenv winmm z)
 else()
     target_link_libraries(hrt-tool PRIVATE ${CMAKE_DL_LIBS} m)
 endif()
