@@ -17,10 +17,12 @@
   session.
 - Plaintext secrets are never written to logs. Debug logs are encrypted,
   length-framed records.
-- A vault or password file that is readable by group or others is refused.
+- On Linux and macOS, a vault or password file that is accessible to group or
+  others is refused.
 - Exports never replace an existing file. Plaintext leaves the tool only on
   stdout, for example `export --out -`.
-- Local input files are capped at 16 MiB and must be regular files.
+- Local input files are capped at 16 MiB. On Linux and macOS they must also be
+  regular files.
 - On Windows the vault relies on NTFS ACLs, and vault writes are not yet
   crash-durable.
 
@@ -32,9 +34,10 @@ password.
 
 - Ordinary servers need `https://` or `hrt://`. `http://` is accepted only for
   loopback, `.onion`, and `.i2p` hosts, with a warning on every run.
-- Before any credential is sent, an unauthenticated trust probe
-  (`GET /api/tool/v1/version`) must answer `200`. Redirects are never
-  followed.
+- Before any credential is sent, the server is probed. For `https://` and
+  `http://` this is an unauthenticated `GET /api/tool/v1/version` that must
+  answer `200`; for `hrt://` it is a TLS 1.3 handshake with no HTTP request.
+  Redirects are never followed.
 - On first contact the TLS certificate and SPKI SHA-256 are shown. Typing
   `yes` pins them; `--trust-server` persists the decision
   non-interactively; `--yes` accepts a first-contact key for the current run
@@ -91,7 +94,7 @@ See [Using hrt-tool](Using-hrt-tool#logging-in) for both flows.
 
 - No device fingerprinting and no global ban list. The `hrt://` device key is
   a random per-install key pair, not a fingerprint of the hardware, and the
-  account owner can revoke it under **Account → Security**.
+  account owner can revoke it under **Account → Security → hrt-tool sign-in**.
 - The raw `hrt/1` server is opt-in; HTTPS remains the default.
 - No shell execution: the tools do not call `system`, `popen`, `exec`, or
   `dlopen`.

@@ -24,7 +24,10 @@ Automation can supply the password with `--vault-password-stdin` or
 `--vault-password-file FILE` (mode `0600`). Secrets are never taken from
 environment variables or command-line arguments.
 
-Running `hrt-tool` with no arguments in a terminal starts the console.
+Running `hrt-tool` with no arguments in a terminal starts the console with
+default options. To give it flags such as `--config-dir`, run
+`hrt-tool console --config-dir DIR`. With no arguments and no terminal on
+standard input, `hrt-tool` prints the help text instead.
 
 ## Commands
 
@@ -62,6 +65,7 @@ hrt-tool config unset server        # back to https://hrt.mahiro.uk
 - Ordinary remote servers must use `https://`. Plain `http://` is accepted only
   for loopback, `.onion`, and `.i2p` hosts, with a warning on every run.
 - An `hrt://` URL selects the raw `hrt/1` transport and must not have a path.
+  The port is optional and defaults to `9443`.
 - Switching to a different origin clears the saved session and device
   identity, with a warning.
 - The token is sent only to the origin that issued it. A different `--server`
@@ -77,10 +81,12 @@ operator's responsibility, so ask your operator whether one exists.
 
 ## Trusting a server
 
-Before any credential is sent, `hrt-tool` makes an unauthenticated
-`GET /api/tool/v1/version` request, which must answer `200`. On first contact
-it prints the scheme, host, port, certificate subject, issuer, validity, and
-SPKI SHA-256 to stderr, then asks you to type `yes`.
+Before any credential is sent, `hrt-tool` checks the server. For `https://` and
+`http://` it makes an unauthenticated `GET /api/tool/v1/version` request, which
+must answer `200`. For `hrt://` it makes no HTTP request: it opens a TLS 1.3
+connection and takes the public key of the server certificate. On first contact
+it prints `first contact with scheme://host:port` and the certificate details,
+including the SPKI SHA-256, to stderr, then asks you to type `yes`.
 
 | Situation | Result |
 | --- | --- |
@@ -114,9 +120,10 @@ leaves the machine:
 
 1. `hrt-tool login --username alice` prints a 128-hex-character code and the
    web address, then waits.
-2. In the web app, open **Account → Security**, check the IP address, country,
-   and device fingerprint the server saw, and enter the code. Only the code's
-   SHA-256 is sent.
+2. In the web app, open **Account → Security → hrt-tool sign-in**, check the
+   IP address, country, and device fingerprint the server saw, and enter the
+   code. Only the code's SHA-256 is sent. That entry appears only when the
+   server has hrt-tool pairing enabled.
 3. `hrt-tool` asks for the account password locally to derive the cloud-data
    key.
 
@@ -124,8 +131,9 @@ A code expires after five minutes. A denied or expired code triggers the same
 60-second pause. The first `hrt://` login creates a device key and a
 self-signed certificate in the vault; every raw request is signed with it, and
 the session is bound to that certificate. Revoke a device under
-**Account → Security**. `--device-name NAME` sets its label. `--require-hrt`
-refuses to fall back to the HTTPS password flow.
+**Account → Security → hrt-tool sign-in**. `--device-name NAME` sets its label
+(1 to 64 printable characters). `--require-hrt` refuses to fall back to the
+HTTPS password flow.
 
 The vault keeps the token, user id, device pass, and, by default, the derived
 cloud key. To keep the key out of the vault, pass `--no-cache-cloud-key` to
@@ -182,8 +190,8 @@ Commands that change a local snapshot hold the advisory lock
 offset are local unless `--utc` is set.
 
 `look` is an uncalibrated baseline: the EKF, OU, and MIPD models are not
-ported, and it prints a warning saying so. It applies the age-based clearance
-adjustment but never prints the birth year.
+ported, and it prints `warning: uncalibrated baseline (calibration is not ported yet)`.
+It applies the age-based clearance adjustment but never prints the birth year.
 
 ## Export and import
 

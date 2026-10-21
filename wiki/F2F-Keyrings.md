@@ -13,7 +13,9 @@ hrt-tool f2f keygen|login|register|status|keyring|encrypt|decrypt|version
 
 F2F has its own `--server`, `--proxy`, `--token-file`, and `--timeout`. It never
 reads or inherits the account vault's link, token, proxy, or mode. `--proxy`
-takes `socks5h://HOST:PORT`; `socks5://` is rewritten to `socks5h://`.
+takes `socks5h://HOST:PORT`; `socks5://` is rewritten to `socks5h://`. F2F
+`--timeout` takes 1 to 300 seconds (default 30), unlike `hrt-tool`, which
+accepts 1 to 3600.
 
 ## Key generation
 
@@ -45,8 +47,9 @@ hrt-tool f2f register --server https://hrt.example.org --token-file token \
 
 - The code is 32 hex characters, works once, and expires after 10 minutes.
   Generating a new code invalidates the previous one.
-- `--code-file FILE` can replace `--code CODE` and keeps the code out of shell
-  history.
+- `login` needs `--token-out` and exactly one of `--code` or `--code-file`.
+  `--code-file FILE` keeps the code out of shell history; the file must be mode
+  `0600` on Unix and hold a single line.
 - The token file is written with mode `0600`. The token works only for the F2F
   endpoints and expires after 7 days. It appears as `hrt-f2f CLI` under
   **Account → Active Sessions**, where you can revoke it.
@@ -62,7 +65,7 @@ hrt-tool f2f keyring list cohort-keyring.asc
 
 | Command | Result |
 | --- | --- |
-| `status` | Cohort, seat, active key, and the cohort escrow key fingerprint when there is one. |
+| `status` | Cohort and its state, seat, member count, active key, and the cohort escrow key fingerprint when there is one. Prints `not registered in an F2F cohort` if you have no cohort. |
 | `keyring pull --out FILE` | The cohort keyring, saved as armored public keys. |
 | `keyring list FILE` | Each fingerprint with its user IDs. |
 | `keyring merge --out FILE FILE...` | One keyring from several files, without duplicates. |
@@ -105,14 +108,18 @@ hrt-tool f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
   --in message.asc --out message.txt
 ```
 
+- `encrypt` needs `--in`, `--out`, and at least one `--recipient` or
+  `--escrow` file.
 - `--recipient` is repeatable and takes a public key or a keyring file. One
-  encryption accepts at most 100 keys and 1 MiB of armored key data across all
-  recipient files.
-- Expired, revoked, and non-encrypting recipient keys are refused. An empty
-  message is refused.
+  encryption accepts at most 100 keys and 1 MiB of armored key data. Both
+  limits are counted across all recipient files and the `--escrow` file
+  together, before duplicate keys are removed.
+- Expired, revoked, and non-encrypting recipient keys are refused, and one such
+  key blocks the whole encryption. An empty message is refused.
 - `--signer-private` and `--signer-passphrase-file` sign inside the encrypted
-  message. `decrypt --verify-key bob-public.asc` requires a valid signature
-  from that key.
+  message and must be given together. `decrypt --verify-key bob-public.asc`
+  requires a valid signature from that key.
+- `decrypt` needs `--private`, `--passphrase-file`, `--in`, and `--out`.
 - `--binary` writes binary output instead of ASCII armor.
 - Encryption is authenticated and uncompressed. Output files are atomic, mode
   `0600`, and refuse replacement without `--force`.
