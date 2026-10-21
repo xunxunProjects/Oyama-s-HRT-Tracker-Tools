@@ -83,9 +83,11 @@ int main() {
     std::ostringstream at_out;
     std::ostringstream at_err;
     CHECK_EQ(run_cli(6, argv_at, at_in, at_out, at_err), 0);
-    CHECK(at_out.str().find("1h") != std::string::npos);
-    CHECK(at_out.str().find("2h") != std::string::npos);
-    CHECK(at_out.str().find("30m") == std::string::npos);
+    /* Include the trailing space so the elapsed-time cell (e.g. "... , 30min")
+       cannot satisfy or defeat the offset check. */
+    CHECK(at_out.str().find("1h ") != std::string::npos);
+    CHECK(at_out.str().find("2h ") != std::string::npos);
+    CHECK(at_out.str().find("30m ") == std::string::npos);
 
     const char *argv_labs[] = {"hrt-tool", "status", "--snapshot",
                                snapshot.c_str(), "--labs", "1"};
