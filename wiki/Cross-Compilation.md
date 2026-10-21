@@ -38,15 +38,20 @@ avoid shipping DLLs in the archive.
 Gentoo cross packages:
 
 ```sh
-echo 'cross-x86_64-w64-mingw32/dev-libs/openssl static-libs' | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
-echo 'cross-x86_64-w64-mingw32/net-misc/curl static-libs -quic -http3' | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
+CURL_FLAGS='static-libs -quic -http3 -alt-svc -httpsrr -ech -http2 -idn -psl -adns -zstd -brotli'
+
+echo 'cross-x86_64-w64-mingw32/dev-libs/openssl static-libs -quic' | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
+echo "cross-x86_64-w64-mingw32/net-misc/curl $CURL_FLAGS" | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
 sudo x86_64-w64-mingw32-emerge -1av dev-libs/openssl net-misc/curl
 
 sudo crossdev -t i686-w64-mingw32
-echo 'cross-i686-w64-mingw32/dev-libs/openssl static-libs' | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
-echo 'cross-i686-w64-mingw32/net-misc/curl static-libs -quic -http3' | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
+echo 'cross-i686-w64-mingw32/dev-libs/openssl static-libs -quic' | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
+echo "cross-i686-w64-mingw32/net-misc/curl $CURL_FLAGS" | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
 sudo i686-w64-mingw32-emerge -1av dev-libs/openssl net-misc/curl
 ```
+
+With these flags the cross curl depends only on zlib and OpenSSL, not on
+nghttp2/nghttp3/ICU/GnuTLS.
 
 Windows link requirements are added by the toolchain files: `ws2_32`,
 `crypt32`, `bcrypt`, `ntdll`, and `userenv`. Go's c-archive also needs

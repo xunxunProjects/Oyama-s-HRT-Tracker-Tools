@@ -201,7 +201,7 @@ target_link_libraries(hrt-tool PRIVATE
 )
 if(WIN32)
     target_link_libraries(hrt-tool PRIVATE
-        ws2_32 crypt32 bcrypt ntdll userenv winmm)
+        ws2_32 crypt32 bcrypt ntdll userenv winmm z)
 else()
     target_link_libraries(hrt-tool PRIVATE ${CMAKE_DL_LIBS} m)
 endif()

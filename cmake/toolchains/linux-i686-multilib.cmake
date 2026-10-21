@@ -16,6 +16,12 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
+# Keep pkg-config away from the 64-bit .pc files; CMake's FindOpenSSL may
+# prefer pkg-config over OPENSSL_*_LIBRARY.
+set(ENV{PKG_CONFIG_PATH} "/usr/lib32/pkgconfig")
+set(ENV{PKG_CONFIG_LIBDIR} "/usr/lib32/pkgconfig:/usr/share/pkgconfig")
+
+set(OPENSSL_ROOT_DIR /usr)
 set(OPENSSL_INCLUDE_DIR /usr/include)
 set(OPENSSL_SSL_LIBRARY /usr/lib32/libssl.so)
 set(OPENSSL_CRYPTO_LIBRARY /usr/lib32/libcrypto.so)
