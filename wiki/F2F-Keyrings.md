@@ -34,12 +34,13 @@ Upload `alice-public.asc` and its fingerprint in **Account → F2F keyring** on
 the web app, or use a one-time login code from the same page:
 
 ```sh
-hrt-tool f2f login --server https://hrt.example.org --token-file token
+hrt-tool f2f login --server https://hrt.example.org \
+  --code CODE --token-out token
 hrt-tool f2f register --server https://hrt.example.org --token-file token \
   --public-key alice-public.asc
 ```
 
-Then fetch the cohort keyring:
+`--code-file FILE` can replace `--code CODE`. Then fetch the cohort keyring:
 
 ```sh
 hrt-tool f2f status --server https://hrt.example.org --token-file token
@@ -50,10 +51,13 @@ hrt-tool f2f keyring pull --server https://hrt.example.org --token-file token \
 ## Encrypt and decrypt
 
 ```sh
-hrt-tool f2f encrypt --keyring cohort-keyring.asc --in message.txt --out message.asc
+hrt-tool f2f encrypt --recipient cohort-keyring.asc --in message.txt --out message.asc
 hrt-tool f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
   --in message.asc --out message.txt
 ```
+
+`--recipient` is repeatable. Use `--signer-private` and
+`--signer-passphrase-file` to sign inside the encrypted message.
 
 Encryption is authenticated and uncompressed. Signing is optional and verifies
 the plaintext inside the encrypted message. Output files are atomic, mode
