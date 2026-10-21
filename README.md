@@ -1,209 +1,58 @@
 # Oyama HRT Tracker Tools
 
-Offline tools for the `oyama-hrt-complete-backup` bundle.
+Offline command-line tools for the Oyama HRT Tracker data format: `hrt-tool`
+(encrypted vault, console, PK status, live sync, and the F2F keyring) and
+`hrt-cold` (OpenPGP cold backups).
 
-**Status: pre-release `0.1.0`.** The `.hrtb` container is experimental and not
-stable. Nothing here is production-approved or independently audited. Keep
-private keys and passphrases offline and separate from backups.
+> **Pre-release `0.1.1`.** Experimental, not independently audited, and not
+> production-supported. Use synthetic data when testing. Keep private keys and
+> passphrases offline.
 
-## What this is
-
-This is an independent project for the offline side of Oyama HRT Tracker
-backups. The first tool, [`hrt-cold`](tools/hrt-cold/README.md), is a standalone
-OpenPGP cold-backup CLI:
-
-- validates the complete-backup envelope and the experimental `.hrtb`
-  container;
-- signs the plaintext bundle and encrypts it to a recipient public key
-  (sign-then-encrypt);
-- decrypts, verifies the OpenPGP integrity check, and verifies a pinned signer
-  public key;
-- keeps a local high-water mark for verified backups and refuses an older
-  replay by default;
-- writes files atomically without replacing an existing output, and writes no
-  plaintext on a failed check.
-
-The Oyama HRT Tracker website is one compatible producer and consumer of the
-bundle format. It does not handle OpenPGP keys or passphrases, and its direct
-plaintext import path is unauthenticated by design.
-
-The second tool, [`hrt-tool`](tools/hrt-tool/README.md), is the terminal
-client. M2 provides the encrypted local vault, master-password gate, encrypted
-logs, URL/trust policy, the C PK engine validated against the website, cloud
-snapshot decryption, and local `look`/`add`/`dose`/`lab`/`weight`/`export`/
-`import` commands. The live server client is M3/M4.
-
-The F2F keyring commands are part of [`hrt-tool`](tools/hrt-tool/README.md)
-as `hrt-tool f2f ...` (the Go/OpenPGP implementation is linked into the C++
-binary as a local library). It generates member-owned OpenPGP keys, uploads
-only public keys, downloads the cohort keyring, and encrypts/decrypts locally.
-Private keys are never sent to the server. The same binary now provides the
-interactive `hrt>` console, named links, `status`, interactive `add dose`,
-proxy shortcuts, and `make install`/`make update`. The standalone
-[`hrt-f2f`](tools/hrt-f2f/README.md) source remains for development.
-
-## Quick start (merged CLI)
+## Quick Start
 
 ```sh
-make -C tools/hrt-tool install          # PREFIX=/usr/local by default
-hrt-tool console                        # or just hrt-tool on a TTY
+make -C tools/hrt-tool install   # PREFIX=/usr/local by default
+hrt-tool init
+hrt-tool console
 ```
-
-Inside the console:
 
 ```text
 hrt> add-link hrt://hrt.example.org:9443 mtf
 hrt> commit-server mtf
 hrt$mtf> status all
 hrt$mtf> add dose
-hrt$mtf> exit
 ```
 
-`hrt-tool f2f ...` exposes the F2F keyring commands. `hrt-tool help
-exit-codes` prints the stable exit-code table. `make update` rebuilds and
-reinstalls the current tree without touching the vault.
+## Essential Documentation
 
-## Download
-
-See the [latest release](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/releases).
-The `0.1.0` pre-release publishes four binaries, a detached GPG signature for
-each, and `SHA512SUMS` / `MD5SUMS`:
-
-- `hrt-cold-linux-amd64`
-- `hrt-cold-windows-amd64.exe`
-- `hrt-cold-linux-386`
-- `hrt-cold-windows-386.exe`
-
-Release signing key:
-
-```text
-77E9454AEC3265F44DC9F633642B427879C25A49
-haiyanfurry@proton.me
-```
-
-Verify before running:
-
-```sh
-sha512sum -c SHA512SUMS
-md5sum -c MD5SUMS
-gpg --verify hrt-cold-linux-amd64.sig hrt-cold-linux-amd64
-```
-
-The `.sig` files are binary detached signatures. The release page has the
-commands for every asset.
-
-## Quick start
-
-```sh
-# Keep the passphrase in a mode-0600 file, offline.
-hrt-cold keygen \
-  --private-out backup-private.asc \
-  --public-out backup-public.asc \
-  --passphrase-file passphrase.txt
-
-hrt-cold encrypt \
-  --recipient backup-public.asc \
-  --signer-private signing-private.asc \
-  --signer-passphrase-file signing-passphrase.txt \
-  --in complete-backup.json \
-  --out complete-backup.hrtb
-
-hrt-cold decrypt \
-  --private backup-private.asc \
-  --passphrase-file passphrase.txt \
-  --verify-key signing-public.asc \
-  --in complete-backup.hrtb \
-  --out restored-complete-backup.json
-```
-
-Run `hrt-cold version` to confirm the binary, Go runtime, and platform. See
-[`tools/hrt-cold/README.md`](tools/hrt-cold/README.md) for all commands, limits,
-and failure behaviour.
-
-## Security model
-
-- Encryption is public-key OpenPGP to the supplied recipient. Signing is
-  optional; without `--verify-key`, decrypt does not verify origin.
-- A pinned verification key fails closed on unsigned input, a bad signature, or
-  a different signer.
-- Anti-replay is a local high-water mark, not a global freshness service. A
-  fresh device, a deleted state file, a compromised signer key, or a malicious
-  binary can defeat it. `--allow-older` overrides without lowering the mark.
-- A failed decrypt, integrity check, signature check, or replay check writes no
-  plaintext output.
-- The website's direct plaintext import is not authenticated. Website-level
-  provenance would require changing the website's no-keys boundary.
-- There is no key rotation, revocation workflow, recovery kit, physical erasure
-  claim, or independent cryptographic audit.
-
-## Platform support
-
-| Platform | Evidence |
+| Need | Read |
 | --- | --- |
-| Linux amd64 | native build and full synthetic round-trip; CI |
-| Linux 386 | native build and full synthetic round-trip; CI Go tests on amd64 |
-| Windows amd64 | native Go tests in CI; packaged binary round-trip under Wine |
-| Windows 386 | packaged binary round-trip under Wine; native Windows 386 execution not CI-tested |
+| Install, first vault, cold-backup round trip | [Quick Start](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Quick-Start) |
+| Build from source, install, update | [Build and Install](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Build-and-Install) |
+| Commands and console | [Using hrt-tool](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Using-hrt-tool) |
+| Offline backups | [Using hrt-cold](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Using-hrt-cold) |
+| F2F keys and cohorts | [F2F Keyrings](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/F2F-Keyrings) |
+| Security and privacy | [Security Model](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Security-Model), [`SECURITY.md`](SECURITY.md) |
+| Download and verify | [Downloads and Verification](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Downloads-and-Verification) |
+| Develop or package | [Development Guide](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Development-Guide), [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Errors and exit codes | [Troubleshooting](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Troubleshooting) |
 
-OpenPGP behaviour is delegated to gopenpgp/go-crypto. The project does not
-implement its own cryptography or KDF.
+## Who Are You
 
-## Repository layout
+- **I use the website and want a terminal client.** Start with [Using hrt-tool](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Using-hrt-tool).
+- **I want encrypted offline backups.** Start with [Using hrt-cold](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Using-hrt-cold).
+- **I am in an F2F cohort.** Start with [F2F Keyrings](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/F2F-Keyrings).
+- **I need Tor, I2P, Qubes, Whonix, or Tails.** Start with [Privacy Environments](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Privacy-Environments).
+- **I build, package, or maintain releases.** Start with [Build and Install](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Build-and-Install) and [Cross Compilation](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Cross-Compilation).
+- **I review security.** Read [Security Model](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Security-Model) and [`SECURITY.md`](SECURITY.md) before testing.
 
-```text
-tools/hrt-cold/      Go CLI, tests, fixtures, notices, and release script
-tools/hrt-tool/      C/C++/Rust terminal client (M2 local data)
-docs/native/         Docs-first C/C++ native core design, ABI, build, and test plan
-docs/backup-schema-audit/TOOLS_INTERFACE.md
-configure, CMakeLists.txt, cmake/, include/, tests/native/
-```
+## For Specific Users
 
-The Go CLI is the working implementation. The C/C++ core is Milestone 0:
-`configure`, CMake, a v1 C ABI header, and design documents exist, but no native
-parser, crypto backend, replay store, or file writer is implemented yet. RNP is
-the leading OpenPGP backend candidate; no crypto dependency is linked.
+- **hrt-cold only:** the offline OpenPGP backup CLI; it never talks to the server.
+- **hrt-tool users:** one binary for the console, named links, local data, live sync, and `hrt-tool f2f ...`.
+- **Windows and 32-bit users:** check [Cross Compilation](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Cross-Compilation) and the release notes; do not assume an artifact exists until it is listed.
+- **Qubes, Whonix, Tails, Tor, I2P:** see [Privacy Environments](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Privacy-Environments).
+- **Release maintainers and signers:** see [Release Process](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Release-Process).
+- **Distro packagers:** see [Build and Install](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Build-and-Install); runtime dependencies are OpenSSL 3, libcurl, and the platform C++ runtime.
 
-## Build from source
-
-```sh
-cd tools/hrt-cold
-go build -o hrt-cold .
-go vet ./...
-go test ./...
-```
-
-Native scaffold:
-
-```sh
-./configure --build-dir=build --enable-werror
-cmake --build build
-(cd build && ctest --output-on-failure)
-```
-
-See [`docs/native/BUILD.md`](docs/native/BUILD.md) for options, install layout,
-and Windows notes.
-
-## Release packaging
-
-```sh
-tools/hrt-cold/scripts/build-release.sh 0.1.0 /path/to/output
-```
-
-The script runs the tests, builds the four static `CGO_ENABLED=0` binaries,
-writes per-binary SHA-512/MD5 sums, and creates the release archive. The
-published `0.1.0` release uses per-binary GPG signatures.
-
-## Documentation
-
-- [`tools/hrt-cold/README.md`](tools/hrt-cold/README.md) — CLI commands and limits
-- [`tools/hrt-tool/README.md`](tools/hrt-tool/README.md) — terminal client, M2 status
-- [`tools/hrt-cold/HANDOFF.md`](tools/hrt-cold/HANDOFF.md) — checkpoint and evidence
-- [`docs/backup-schema-audit/TOOLS_INTERFACE.md`](docs/backup-schema-audit/TOOLS_INTERFACE.md) — bundle interface
-- [`docs/native/README.md`](docs/native/README.md) — native core status
-- [`SECURITY.md`](SECURITY.md) — reporting and scope
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — build, test, and contribution rules
-
-## Licence
-
-MIT. Third-party runtime notices are in
-[`tools/hrt-cold/THIRD_PARTY_NOTICES.md`](tools/hrt-cold/THIRD_PARTY_NOTICES.md).
+MIT licensed. Third-party notices are included in each release package.
