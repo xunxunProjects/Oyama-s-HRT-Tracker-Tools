@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-project(hrt_tool VERSION 0.1.0 LANGUAGES C CXX)
+set(HRT_TOOL_VERSION "0.1.1" CACHE STRING "hrt-tool release version")
+set(HRT_RUST_TARGET "" CACHE STRING "Rust target triple (empty = host)")
+set(HRT_GOOS "" CACHE STRING "Go GOOS (empty = host)")
+set(HRT_GOARCH "" CACHE STRING "Go GOARCH (empty = host)")
+set(HRT_GO_CC "" CACHE STRING "C compiler for cgo (empty = host default)")
+set(HRT_GO_CXX "" CACHE STRING "C++ compiler for cgo (empty = host default)")
+set(HRT_GO_CGO_CFLAGS "" CACHE STRING "cgo CFLAGS (empty = none)")
+set(HRT_GO_CGO_LDFLAGS "" CACHE STRING "cgo LDFLAGS (empty = none)")
+project(hrt_tool VERSION ${HRT_TOOL_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -52,15 +60,25 @@ add_library(hrtcore STATIC
     native/core/pk.c
 )
 target_include_directories(hrtcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(hrtcore PRIVATE
+    HRT_CORE_VERSION_STRING="${PROJECT_VERSION}")
 target_link_libraries(hrtcore PUBLIC OpenSSL::Crypto)
 
 set(HRTPRINT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rust/hrt-print)
-set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/release/libhrtprint.a)
+if(HRT_RUST_TARGET)
+    set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/${HRT_RUST_TARGET}/release/libhrtprint.a)
+    set(HRTPRINT_TARGET_ARG --target ${HRT_RUST_TARGET})
+else()
+    set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/release/libhrtprint.a)
+    set(HRTPRINT_TARGET_ARG "")
+endif()
 add_custom_command(
     OUTPUT ${HRTPRINT_LIB}
-    COMMAND ${CARGO_EXECUTABLE} build --release --offline
+    COMMAND ${CMAKE_COMMAND} -E env HRTPRINT_VERSION=${PROJECT_VERSION}
+            ${CARGO_EXECUTABLE} build --release --offline ${HRTPRINT_TARGET_ARG}
             --manifest-path ${HRTPRINT_DIR}/Cargo.toml
-    DEPENDS ${HRTPRINT_DIR}/Cargo.toml ${HRTPRINT_DIR}/src/lib.rs
+    DEPENDS ${HRTPRINT_DIR}/Cargo.toml ${HRTPRINT_DIR}/Cargo.lock
+            ${HRTPRINT_DIR}/build.rs ${HRTPRINT_DIR}/src/lib.rs
     WORKING_DIRECTORY ${HRTPRINT_DIR}
     COMMENT "Building Rust hrtprint"
     VERBATIM
@@ -71,18 +89,31 @@ set(HRT_F2F_SOURCES src/f2f_bridge_stub.cpp)
 set(HRTF2F_INCLUDE_DIR "")
 set(HRTF2F_LINK_LIB "")
 set(HRTF2F_DEPENDENCY "")
+set(HRT_F2F_ENABLED_VALUE 0)
 if(HRT_TOOL_ENABLE_F2F)
+    set(HRT_F2F_ENABLED_VALUE 1)
     find_program(GO_EXECUTABLE go REQUIRED)
     set(HRTF2F_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../hrt-f2f)
     set(HRTF2F_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/hrtf2f)
     set(HRTF2F_LIB ${HRTF2F_BUILD_DIR}/libhrtf2f.a)
     set(HRTF2F_HEADER ${HRTF2F_BUILD_DIR}/libhrtf2f.h)
     file(GLOB HRTF2F_GO_SOURCES CONFIGURE_DEPENDS ${HRTF2F_DIR}/*.go)
+    set(HRTF2F_ENV CGO_ENABLED=1)
+    foreach(pair "GOOS;HRT_GOOS" "GOARCH;HRT_GOARCH" "CC;HRT_GO_CC"
+                 "CXX;HRT_GO_CXX" "CGO_CFLAGS;HRT_GO_CGO_CFLAGS"
+                 "CGO_LDFLAGS;HRT_GO_CGO_LDFLAGS")
+        list(GET pair 0 env_name)
+        list(GET pair 1 var_name)
+        if(${var_name})
+            list(APPEND HRTF2F_ENV "${env_name}=${${var_name}}")
+        endif()
+    endforeach()
     add_custom_command(
         OUTPUT ${HRTF2F_LIB} ${HRTF2F_HEADER}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${HRTF2F_BUILD_DIR}
-        COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
+        COMMAND ${CMAKE_COMMAND} -E env ${HRTF2F_ENV}
                 ${GO_EXECUTABLE} build -buildmode=c-archive -trimpath
+                -ldflags "-X main.buildVersion=${PROJECT_VERSION}"
                 -o ${HRTF2F_LIB} .
         DEPENDS ${HRTF2F_GO_SOURCES} ${HRTF2F_DIR}/go.mod ${HRTF2F_DIR}/go.sum
         WORKING_DIRECTORY ${HRTF2F_DIR}
@@ -140,6 +171,12 @@ target_include_directories(hrtcpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${HRTF2F_INCLUDE_DIR}
 )
+target_compile_definitions(hrtcpp PUBLIC
+    HRT_TOOL_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    HRT_TOOL_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    HRT_TOOL_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    HRT_TOOL_F2F_ENABLED=${HRT_F2F_ENABLED_VALUE}
+)
 target_link_libraries(hrtcpp PUBLIC
     hrtcore
     nlohmann_json::nlohmann_json
@@ -161,9 +198,13 @@ target_link_libraries(hrt-tool PRIVATE
     hrtcpp
     CURL::libcurl
     Threads::Threads
-    ${CMAKE_DL_LIBS}
-    m
 )
+if(WIN32)
+    target_link_libraries(hrt-tool PRIVATE
+        ws2_32 crypt32 bcrypt ntdll userenv winmm)
+else()
+    target_link_libraries(hrt-tool PRIVATE ${CMAKE_DL_LIBS} m)
+endif()
 add_dependencies(hrt-tool hrtprint_build)
 hrt_tool_warnings(hrt-tool)
 

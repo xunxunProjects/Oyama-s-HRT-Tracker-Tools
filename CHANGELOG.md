@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased — merged `hrt-tool` console
+## 0.1.1 — 2026-10-21
+
+Documentation and release engineering; no runtime CLI output changes.
+
+### Documentation and release engineering
+
+- The GitHub wiki is the documentation home, versioned in `wiki/` and
+  published with `scripts/publish-wiki.sh`.
+- The root README is now a guide: Quick Start, Essential Documentation,
+  Who Are You, and For Specific Users.
+- `hrt-tool`, `hrtcore`, `hrtprint`, and F2F report version `0.1.1` from one
+  CMake source; the HTTP User-Agent is derived from the compiled version.
+- Release packaging supports linux/amd64, linux/386, windows/amd64, and
+  windows/386, with SHA-512 and MD5 checksums; GPG signatures are added by
+  the release owner separately.
+
+### Merged `hrt-tool` console and links
 
 - `hrt-f2f` is merged into `hrt-tool`: the Go/OpenPGP implementation is
   built as a `c-archive` and called by C++; the installed binary is still
@@ -32,7 +48,7 @@
 - CI: Go setup, install smoke test, a warnings-as-errors build, and an
   ASan/UBSan job with F2F disabled.
 
-## Unreleased — `hrt-tool` (original M1–M4 work)
+### Original `hrt-tool` M1–M4 work
 
 - New `hrt-tool` terminal client, a separate codebase from `hrt-cold`:
   C11 crypto core, C++17 CLI, and Rust printer.

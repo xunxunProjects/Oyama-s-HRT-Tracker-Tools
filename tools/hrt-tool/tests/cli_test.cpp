@@ -464,9 +464,14 @@ int main() {
     {
         const RunResult result = run({"version"});
         CHECK_EQ(result.code, 0);
-        CHECK(contains(result.out, "hrt-tool 0.1.0"));
-        CHECK(contains(result.out, "hrtcore 0.1.0"));
-        CHECK(contains(result.out, "hrtprint 0.1.0"));
+        CHECK(contains(result.out, "hrt-tool 0.1.1"));
+        CHECK(contains(result.out, "hrtcore 0.1.1"));
+        CHECK(contains(result.out, "hrtprint 0.1.1"));
+#if HRT_TOOL_F2F_ENABLED
+        CHECK(contains(result.out, "f2f 0.1.1"));
+#else
+        CHECK(contains(result.out, "f2f disabled"));
+#endif
     }
 
     {
