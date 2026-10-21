@@ -57,15 +57,19 @@ Do not assume a key from an older release signed a newer one.
 
 ## Platform evidence
 
-The release notes record what was actually run for each target:
+For `0.1.1` the following were run:
 
-- `linux/amd64`: native build, full test suite, `hrt-tool version`.
-- `linux/386`: built with 32-bit libraries; run natively when available.
-- `windows/amd64`, `windows/386`: built with MinGW; `hrt-tool version` under
-  Wine. Native Windows execution is separate evidence.
+- `linux/amd64`: native build, full CTest suite (40/40), `hrt-tool version`,
+  SHA-512 and MD5 verification.
+- `linux/386`: 32-bit build, `hrt-tool version` run natively on the x86_64
+  host with 32-bit libraries, SHA-512 and MD5 verification.
+- `windows/amd64`, `windows/386`: static MinGW builds, `hrt-tool version` run
+  under Wine, SHA-512 and MD5 verification. The executables import only
+  Windows system DLLs; no libcurl or OpenSSL DLL is needed.
 
-An artifact that exists without a recorded version check is marked
-"built, not executed", not "verified".
+Native Windows execution is separate evidence. An artifact that exists
+without a recorded version check is marked "built, not executed", not
+"verified".
 
 ## Canonical sources
 
