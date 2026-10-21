@@ -11,3 +11,4 @@ struct ToolVersion {
 ToolVersion current_version();
 
 std::string format_version_line();
+std::string format_version_json();

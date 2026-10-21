@@ -107,8 +107,21 @@ func TestValidateProxy(t *testing.T) {
 	if _, err := validateProxy("socks5h://127.0.0.1:9050"); err != nil {
 		t.Fatalf("socks5h proxy rejected: %v", err)
 	}
+	alias, err := validateProxy("socks5://127.0.0.1:9050")
+	if err != nil {
+		t.Fatalf("socks5 alias rejected: %v", err)
+	}
+	if alias.Scheme != "socks5h" {
+		t.Fatalf("socks5 alias scheme = %q, want socks5h", alias.Scheme)
+	}
+	defaulted, err := validateProxy("socks5://127.0.0.1")
+	if err != nil {
+		t.Fatalf("portless socks5 rejected: %v", err)
+	}
+	if defaulted.Port() != "1080" {
+		t.Fatalf("portless socks5 port = %q, want 1080", defaulted.Port())
+	}
 	for _, value := range []string{
-		"socks5://127.0.0.1:9050",
 		"http://127.0.0.1:9050",
 		"socks5h://",
 		"",

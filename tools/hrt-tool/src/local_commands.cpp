@@ -1,16 +1,19 @@
 #include "local_commands.h"
 
 #include "backup_envelope.h"
+#include "command_flags.h"
 #include "encrypted_file.h"
 #include "entropy.h"
 #include "error.h"
 #include "file_io.h"
+#include "format.h"
 #include "hrtcore/hrtcore.h"
 #include "hrtprint/hrtprint.h"
 #include "model.h"
 #include "pk.h"
 #include "prompt.h"
 #include "snapshot.h"
+#include "status.h"
 
 #include <algorithm>
 #include <array>
@@ -29,6 +32,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -63,29 +67,6 @@ std::time_t epoch_from_tm(std::tm &tm, bool utc) {
 #endif
 }
 
-std::string format_time(double hours, bool utc) {
-    const std::time_t seconds = static_cast<std::time_t>(hours * 3600.0);
-    std::tm tm{};
-#ifdef _WIN32
-    if (utc) {
-        gmtime_s(&tm, &seconds);
-    } else {
-        localtime_s(&tm, &seconds);
-    }
-#else
-    if (utc) {
-        gmtime_r(&seconds, &tm);
-    } else {
-        localtime_r(&seconds, &tm);
-    }
-#endif
-    char buffer[64] = {};
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &tm);
-    std::string out(buffer);
-    out += utc ? " UTC" : " local";
-    return out;
-}
-
 std::string iso_now() {
     const std::time_t seconds = std::time(nullptr);
     std::tm tm{};
@@ -97,22 +78,6 @@ std::string iso_now() {
     char buffer[64] = {};
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S.000Z", &tm);
     return buffer;
-}
-
-std::string format_duration(double hours) {
-    if (!std::isfinite(hours) || hours < 0.0) {
-        hours = 0.0;
-    }
-    const int total_minutes = static_cast<int>(std::floor(hours * 60.0));
-    const int days = total_minutes / (24 * 60);
-    const int hour_part = (total_minutes / 60) % 24;
-    const int minutes = total_minutes % 60;
-    std::ostringstream out;
-    if (days > 0) {
-        out << days << "d ";
-    }
-    out << hour_part << "h " << minutes << "m";
-    return out.str();
 }
 
 double parse_duration_hours(const std::string &text) {
@@ -152,7 +117,24 @@ bool read_digits(const std::string &text, size_t &pos, size_t count, int &value)
     return true;
 }
 
-double parse_time_hours(const std::string &text, bool utc_requested) {
+double parse_time_hours_impl(const std::string &text, bool utc_requested) {
+    /* The issue's format is YYYY,M,D:HH:MM. Translate it to the ISO form the
+       rest of the parser already understands. */
+    if (text.find(',') != std::string::npos) {
+        std::string translated = text;
+        const size_t first = translated.find(',');
+        const size_t second = translated.find(',', first + 1);
+        if (first == std::string::npos || second == std::string::npos) {
+            throw ToolError(ExitCode::Usage, "TIME", "invalid date: " + text);
+        }
+        translated[first] = '-';
+        translated[second] = '-';
+        const size_t separator = second + 3;
+        if (separator < translated.size() && translated[separator] == ':') {
+            translated[separator] = 'T';
+        }
+        return parse_time_hours_impl(translated, utc_requested);
+    }
     if (text == "now") {
         return now_hours();
     }
@@ -278,7 +260,7 @@ double parse_time_hours(const std::string &text, bool utc_requested) {
     return static_cast<double>(epoch) / 3600.0 + fraction / 3600.0;
 }
 
-double parse_dose_mg(const std::string &text) {
+double parse_dose_mg_impl(const std::string &text) {
     double value = 0.0;
     char unit[16] = {};
     const int matched = std::sscanf(text.c_str(), "%lf%15s", &value, unit);
@@ -317,7 +299,7 @@ std::string normalized_key(const std::string &text) {
     return out;
 }
 
-int parse_route(const std::string &text) {
+int parse_route_impl(const std::string &text) {
     static const std::map<std::string, int> kRoutes = {
         {"sublingual", HRTCORE_ROUTE_SUBLINGUAL},
         {"sl", HRTCORE_ROUTE_SUBLINGUAL},
@@ -358,7 +340,7 @@ std::string route_display(int route) {
     }
 }
 
-int parse_ester(const std::string &drug) {
+int parse_ester_impl(const std::string &drug) {
     static const std::map<std::string, int> kEsters = {
         {"estradiolvalerate", HRTCORE_ESTER_EV},  {"ev", HRTCORE_ESTER_EV},
         {"estradiolbenzoate", HRTCORE_ESTER_EB},  {"eb", HRTCORE_ESTER_EB},
@@ -548,90 +530,8 @@ double class_value(const PkResult &result, int ester, double hour) {
     return hrtcore_pk_interp_e2(&result.raw(), hour);
 }
 
-std::string format_concentration(double value, int ester) {
-    std::ostringstream out;
-    out << std::fixed;
-    if (is_t_ester(ester)) {
-        out << std::setprecision(0) << value << " ng/dL";
-    } else if (ester == HRTCORE_ESTER_CPA) {
-        out << std::setprecision(2) << value << " ng/mL";
-    } else {
-        out << std::setprecision(1) << value << " pg/mL";
-    }
-    return out.str();
-}
-
-std::string format_lab_value(double value, const std::string &unit) {
-    std::ostringstream out;
-    out << std::fixed;
-    if (unit == "pg/ml") {
-        out << std::setprecision(1) << value << " pg/mL (" << std::setprecision(1)
-            << value * 3.671 << " pmol/L)";
-    } else if (unit == "pmol/l") {
-        out << std::setprecision(1) << value << " pmol/L (" << std::setprecision(1)
-            << value / 3.671 << " pg/mL)";
-    } else if (unit == "ng/dl") {
-        out << std::setprecision(1) << value << " ng/dL (" << std::setprecision(2)
-            << value / 28.842 << " nmol/L)";
-    } else if (unit == "nmol/l") {
-        out << std::setprecision(2) << value << " nmol/L (" << std::setprecision(1)
-            << value * 28.842 << " ng/dL)";
-    } else {
-        out << std::setprecision(1) << value << " " << unit;
-    }
-    return out.str();
-}
-
 ModeKey parse_mode_option(const std::string &value) {
     return value == "transmasc" ? ModeKey::Transmasc : ModeKey::Transfem;
-}
-
-struct CommandFlags {
-    std::map<std::string, std::string> values;
-    std::set<std::string> flags;
-    std::vector<std::string> positionals;
-    std::vector<std::string> extras;
-};
-
-CommandFlags parse_command_flags(const std::vector<std::string> &args,
-                                 const std::set<std::string> &value_flags,
-                                 const std::set<std::string> &boolean_flags) {
-    CommandFlags out;
-    for (size_t i = 0; i < args.size(); ++i) {
-        const std::string token = args[i];
-        if (token.empty() || token.front() != '-') {
-            out.positionals.push_back(token);
-            continue;
-        }
-        std::string name = token;
-        std::string value;
-        bool has_value = false;
-        const std::string::size_type equals = token.find('=');
-        if (equals != std::string::npos) {
-            name = token.substr(0, equals);
-            value = token.substr(equals + 1);
-            has_value = true;
-        }
-        if (boolean_flags.count(name) != 0) {
-            out.flags.insert(name);
-            continue;
-        }
-        if (value_flags.count(name) == 0) {
-            throw ToolError(ExitCode::Usage, "FLAG", "unknown flag: " + name);
-        }
-        if (!has_value) {
-            if (i + 1 >= args.size()) {
-                throw ToolError(ExitCode::Usage, "FLAG", "missing value for " + name);
-            }
-            value = args[++i];
-        }
-        if (name == "--extras") {
-            out.extras.push_back(value);
-        } else {
-            out.values[name] = value;
-        }
-    }
-    return out;
 }
 
 std::string require_value(const CommandFlags &flags, const std::string &name) {
@@ -655,7 +555,7 @@ public:
         path_ += ".lock";
         fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
         if (fd_ < 0) {
-            throw ToolError(ExitCode::Vault, "SNAPSHOT_LOCK",
+            throw ToolError(ExitCode::Permission, "SNAPSHOT_LOCK",
                             "cannot open the snapshot lock: " +
                                 std::string(std::strerror(errno)));
         }
@@ -666,7 +566,7 @@ public:
             const std::string detail = std::strerror(errno);
             ::close(fd_);
             fd_ = -1;
-            throw ToolError(ExitCode::Vault, "SNAPSHOT_LOCK",
+            throw ToolError(ExitCode::Permission, "SNAPSHOT_LOCK",
                             "cannot lock the snapshot: " + detail);
         }
 #else
@@ -784,7 +684,7 @@ void render_view(const json &view, bool as_json, std::ostream &out) {
     out.write(buffer.data(), static_cast<std::streamsize>(length));
 }
 
-std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags) {
+std::vector<std::pair<std::string, double>> parse_offsets_impl(const CommandFlags &flags) {
     if (flags.values.count("--at") != 0) {
         std::vector<std::pair<std::string, double>> offsets;
         std::istringstream stream(flags.values.at("--at"));
@@ -806,7 +706,10 @@ std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &fl
             {"24h", 24.0},      {"2d", 48.0}};
 }
 
-int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream &out) {
+json build_pk_view_impl(const ParsedArgs &parsed, const json &raw_payload,
+                        const std::vector<std::pair<std::string, double>> &offsets,
+                        std::ostream &err) {
+    (void)err;
     const json payload = normalize_sync_payload(raw_payload);
     const ModeKey mode = resolve_mode(parsed, payload, false);
     const std::string mode_name = mode_key_name(mode);
@@ -850,6 +753,7 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
 
     json view;
     view["now"] = format_time(current, parsed.options.utc);
+    view["nowStatus"] = format_time_status(current, parsed.options.utc);
     view["mode"] = mode_name;
     view["weightKg"] = weight;
     view["compounds"] = json::array();
@@ -859,6 +763,7 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
             int route;
             int ester;
             double last;
+            double dose;
         };
         std::map<std::pair<int, int>, Group> groups;
         for (const PkEvent &event : events) {
@@ -869,17 +774,21 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
             const std::pair<int, int> key{event.route, event.ester};
             const auto found = groups.find(key);
             if (found == groups.end()) {
-                groups[key] = Group{event.route, event.ester, event.time_h};
+                groups[key] =
+                    Group{event.route, event.ester, event.time_h, event.dose_mg};
             } else if (event.time_h > found->second.last) {
                 found->second.last = event.time_h;
+                found->second.dose = event.dose_mg;
             }
         }
-        const auto offsets = parse_offsets(flags);
         for (const auto &[key, group] : groups) {
             json compound;
             compound["drug"] = drug_display(group.ester);
             compound["route"] = route_display(group.route);
+            compound["dose"] = format_dose(group.dose);
             compound["lastDose"] = format_duration(current - group.last);
+            compound["lastDoseStatus"] = format_elapsed(current - group.last);
+            compound["lastDoseHours"] = current - group.last;
             compound["now"] =
                 format_concentration(class_value(*simulation, group.ester, current),
                                      group.ester);
@@ -918,12 +827,16 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
         const std::string assay = string_or(lab, "assay", "");
         const bool t_unit = unit == "ng/dl" || unit == "nmol/l";
         json view_lab;
-        view_lab["time"] =
-            format_time(number_or(lab, "timeH", 0.0), parsed.options.utc);
+        const double lab_time = number_or(lab, "timeH", 0.0);
+        const double lab_value = number_or(lab, "concValue", 0.0);
+        view_lab["time"] = format_time(lab_time, parsed.options.utc);
+        view_lab["statusTime"] = format_time_status(lab_time, parsed.options.utc);
         view_lab["name"] = t_unit ? "Testosterone" : "Estradiol";
-        view_lab["value"] = format_lab_value(number_or(lab, "concValue", 0.0), unit);
+        view_lab["value"] = format_lab_value(lab_value, unit);
+        view_lab["statusValue"] = format_lab_value_status(lab_value, unit);
         view_lab["method"] =
             assay == "lcms" ? "LC-MS/MS" : (assay == "immuno" ? "Immunoassay" : "");
+        view_lab["statusMethod"] = format_assay(assay);
         view["labs"].push_back(view_lab);
     }
 
@@ -933,6 +846,14 @@ int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream 
     }
     view["warnings"].push_back(
         "warning: uncalibrated baseline (calibration is not ported yet)");
+    return view;
+}
+
+int render_look(const ParsedArgs &parsed, const json &raw_payload, std::ostream &out) {
+    const CommandFlags flags =
+        parse_command_flags(parsed.command_args, {"--at", "--labs"}, {"--all", "-a"});
+    const json view =
+        build_pk_view_impl(parsed, raw_payload, parse_offsets_impl(flags), out);
     render_view(view, parsed.options.json, out);
     return 0;
 }
@@ -956,12 +877,12 @@ json apply_add_local(const ParsedArgs &parsed, json context_payload, std::ostrea
     if (dose_text.empty()) {
         throw ToolError(ExitCode::Usage, "DOSE", "pass --measurement (for example 2mg)");
     }
-    const int ester = parse_ester(drug);
-    const double dose = clean_dose_mg(parse_dose_mg(dose_text));
-    const double time_h = parse_time_hours(time_text, parsed.options.utc);
+    const int ester = parse_ester_impl(drug);
+    const double dose = clean_dose_mg(parse_dose_mg_impl(dose_text));
+    const double time_h = parse_time_hours_impl(time_text, parsed.options.utc);
     int route = default_route(ester);
     if (flags.values.count("--route") != 0) {
-        route = parse_route(flags.values.at("--route"));
+        route = parse_route_impl(flags.values.at("--route"));
     } else {
         err << "assuming route: " << route_display(route) << "\n";
     }
@@ -1067,21 +988,21 @@ std::optional<json> apply_dose_local(const ParsedArgs &parsed, json context_payl
             throw ToolError(ExitCode::Data, "NOT_FOUND", "no event with id " + id);
         }
         if (flags.values.count("--drug") != 0) {
-            (*record)["ester"] = ester_code(parse_ester(flags.values.at("--drug")));
+            (*record)["ester"] = ester_code(parse_ester_impl(flags.values.at("--drug")));
         }
         if (flags.values.count("--route") != 0) {
-            (*record)["route"] = route_display(parse_route(flags.values.at("--route")));
+            (*record)["route"] = route_display(parse_route_impl(flags.values.at("--route")));
         }
         if (flags.values.count("--time") != 0) {
             (*record)["timeH"] =
-                parse_time_hours(flags.values.at("--time"), parsed.options.utc);
+                parse_time_hours_impl(flags.values.at("--time"), parsed.options.utc);
         }
         if (flags.values.count("--measurement") != 0) {
             (*record)["doseMG"] =
-                clean_dose_mg(parse_dose_mg(flags.values.at("--measurement")));
+                clean_dose_mg(parse_dose_mg_impl(flags.values.at("--measurement")));
         } else if (flags.values.count("--dose") != 0) {
             (*record)["doseMG"] =
-                clean_dose_mg(parse_dose_mg(flags.values.at("--dose")));
+                clean_dose_mg(parse_dose_mg_impl(flags.values.at("--dose")));
         }
         (*record)["updatedAt"] = now_milliseconds();
         clear_tombstone(payload, mode, RecordKind::Events, id);
@@ -1144,7 +1065,7 @@ std::optional<json> apply_lab_local(const ParsedArgs &parsed, json context_paylo
     if (sub == "add") {
         json lab{
             {"id", random_id()},
-            {"timeH", parse_time_hours(require_value(flags, "--time"), parsed.options.utc)},
+            {"timeH", parse_time_hours_impl(require_value(flags, "--time"), parsed.options.utc)},
             {"concValue", parse_lab_value(require_value(flags, "--value"))},
             {"unit", canonical_lab_unit(require_value(flags, "--unit"))},
             {"updatedAt", now_milliseconds()},
@@ -1171,7 +1092,7 @@ std::optional<json> apply_lab_local(const ParsedArgs &parsed, json context_paylo
         }
         if (flags.values.count("--time") != 0) {
             (*record)["timeH"] =
-                parse_time_hours(flags.values.at("--time"), parsed.options.utc);
+                parse_time_hours_impl(flags.values.at("--time"), parsed.options.utc);
         }
         if (flags.values.count("--value") != 0) {
             (*record)["concValue"] = parse_lab_value(flags.values.at("--value"));
@@ -1348,14 +1269,14 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
             out.flush();
             std::string answer;
             if (!std::getline(in, answer)) {
-                throw ToolError(ExitCode::Usage, "REPLACE_ABORTED",
+                throw ToolError(ExitCode::Cancelled, "REPLACE_ABORTED",
                                 "snapshot replacement cancelled");
             }
             if (!answer.empty() && answer.back() == '\r') {
                 answer.pop_back();
             }
             if (answer != "yes") {
-                throw ToolError(ExitCode::Usage, "REPLACE_ABORTED",
+                throw ToolError(ExitCode::Cancelled, "REPLACE_ABORTED",
                                 "snapshot replacement cancelled");
             }
         }
@@ -1392,6 +1313,54 @@ int handle_import(const ParsedArgs &parsed, std::istream &in, std::ostream &out)
 }
 
 } // namespace
+
+nlohmann::json build_pk_view(
+    const ParsedArgs &parsed, const nlohmann::json &payload,
+    const std::vector<std::pair<std::string, double>> &offsets, std::ostream &err) {
+    return build_pk_view_impl(parsed, payload, offsets, err);
+}
+
+std::vector<std::pair<std::string, double>> parse_offsets(const CommandFlags &flags) {
+    return parse_offsets_impl(flags);
+}
+
+double parse_time_hours(const std::string &text, bool utc) {
+    return parse_time_hours_impl(text, utc);
+}
+
+int parse_ester(const std::string &drug) { return parse_ester_impl(drug); }
+int parse_route(const std::string &route) { return parse_route_impl(route); }
+double parse_dose_mg(const std::string &text) { return parse_dose_mg_impl(text); }
+
+int handle_status_local(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                        std::ostream &err) {
+    const bool all =
+        std::find(parsed.command_args.begin(), parsed.command_args.end(), "all") !=
+        parsed.command_args.end();
+    const CommandFlags flags =
+        parse_command_flags(parsed.command_args, {"--at", "--labs", "--watch"}, {});
+    int watch = 0;
+    if (flags.values.count("--watch") != 0) {
+        watch = parse_watch_seconds(flags.values.at("--watch"));
+    }
+
+    LocalContext context = open_context(parsed, in, out, false);
+    do {
+        const nlohmann::json view =
+            build_status_view(parsed, context.payload, all, err);
+        if (parsed.options.json) {
+            out << view.dump(2) << "\n";
+        } else {
+            render_status_table(view, all, out);
+        }
+        out.flush();
+        if (watch <= 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(watch));
+    } while (true);
+    return 0;
+}
 
 nlohmann::json apply_add(const ParsedArgs &parsed, nlohmann::json payload,
                          std::ostream &out, std::ostream &err) {

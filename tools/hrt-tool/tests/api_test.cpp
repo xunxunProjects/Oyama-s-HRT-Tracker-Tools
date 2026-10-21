@@ -1,11 +1,33 @@
 #include "api.h"
 #include "error.h"
+#include "net_error.h"
 #include "test_framework.h"
 
 #include <nlohmann/json.hpp>
 #include <string>
 
 int main() {
+    {
+        bool threw = false;
+        try {
+            throw_http_status(503, "{}", "probe");
+        } catch (const NetworkFailure &error) {
+            threw = true;
+            CHECK(error.kind() == FailureKind::ServerInitiated);
+            CHECK(error.exit_code() == ExitCode::Network);
+        }
+        CHECK(threw);
+    }
+    {
+        bool threw = false;
+        try {
+            throw_http_status(401, "{}", "probe");
+        } catch (const ApiAuthError &error) {
+            threw = true;
+            CHECK(error.exit_code() == ExitCode::Auth);
+        }
+        CHECK(threw);
+    }
     {
         const LoginResult login = parse_login_response(nlohmann::json{
             {"token", "jwt"},

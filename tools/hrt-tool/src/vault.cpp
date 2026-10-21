@@ -92,7 +92,7 @@ void check_permissions(const std::filesystem::path &path) {
                         "cannot stat the vault: " + std::string(std::strerror(errno)));
     }
     if ((info.st_mode & 0077) != 0) {
-        throw ToolError(ExitCode::Vault, "VAULT_PERMISSIONS",
+        throw ToolError(ExitCode::Permission, "VAULT_PERMISSIONS",
                         "vault must not be group- or world-accessible; chmod 0600 it");
     }
 #endif
@@ -188,24 +188,110 @@ void write_atomic(const std::filesystem::path &path, const std::vector<uint8_t> 
 #endif
 }
 
-nlohmann::json to_json(const VaultData &data) {
+nlohmann::json link_to_json(const LinkData &link) {
     return nlohmann::json{
-        {"version", data.version},
-        {"token", data.token},
-        {"user_id", data.user_id},
-        {"username", data.username},
-        {"device_pass", data.device_pass},
-        {"cloud_key", data.cloud_key},
-        {"server", data.server},
-        {"proxy", data.proxy},
-        {"trust", data.trust},
-        {"device_key_pem", data.device_key_pem},
-        {"device_cert_pem", data.device_cert_pem},
-        {"device_fingerprint", data.device_fingerprint},
-        {"opsec_ack", data.opsec_ack},
-        {"last_login_failed_at", data.last_login_failed_at},
-        {"created_at", data.created_at},
-        {"updated_at", data.updated_at},
+        {"url", link.url},
+        {"proxy", link.proxy},
+        {"mode", link.mode},
+        {"token", link.token},
+        {"user_id", link.user_id},
+        {"username", link.username},
+        {"device_pass", link.device_pass},
+        {"cloud_key", link.cloud_key},
+        {"device_key_pem", link.device_key_pem},
+        {"device_cert_pem", link.device_cert_pem},
+        {"device_fingerprint", link.device_fingerprint},
+        {"last_login_failed_at", link.last_login_failed_at},
+    };
+}
+
+LinkData link_from_json(const nlohmann::json &value) {
+    if (!value.is_object()) {
+        throw VaultCorruptError("vault link is not a JSON object");
+    }
+    LinkData link;
+    link.url = value.value("url", std::string{"https://hrt.mahiro.uk"});
+    link.proxy = value.value("proxy", std::string{});
+    link.mode = value.value("mode", std::string{});
+    link.token = value.value("token", std::string{});
+    link.user_id = value.value("user_id", std::string{});
+    link.username = value.value("username", std::string{});
+    link.device_pass = value.value("device_pass", std::string{});
+    link.cloud_key = value.value("cloud_key", std::string{});
+    link.device_key_pem = value.value("device_key_pem", std::string{});
+    link.device_cert_pem = value.value("device_cert_pem", std::string{});
+    link.device_fingerprint = value.value("device_fingerprint", std::string{});
+    link.last_login_failed_at =
+        value.value("last_login_failed_at", static_cast<int64_t>(0));
+    return link;
+}
+
+void copy_link_to_view(const LinkData &link, VaultData &data) {
+    data.server = link.url;
+    data.proxy = link.proxy;
+    data.mode = link.mode;
+    data.token = link.token;
+    data.user_id = link.user_id;
+    data.username = link.username;
+    data.device_pass = link.device_pass;
+    data.cloud_key = link.cloud_key;
+    data.device_key_pem = link.device_key_pem;
+    data.device_cert_pem = link.device_cert_pem;
+    data.device_fingerprint = link.device_fingerprint;
+    data.last_login_failed_at = link.last_login_failed_at;
+}
+
+nlohmann::json to_json(const VaultData &data) {
+    VaultData view = data;
+    if (view.links.count("") == 0) {
+        LinkData base;
+        base.url = "https://hrt.mahiro.uk";
+        view.links[""] = base;
+    }
+    if (view.links.count(view.active_link) == 0) {
+        view.active_link = "";
+    }
+    LinkData &active = view.links[view.active_link];
+    active.url = view.server;
+    active.proxy = view.proxy;
+    active.mode = view.mode;
+    active.token = view.token;
+    active.user_id = view.user_id;
+    active.username = view.username;
+    active.device_pass = view.device_pass;
+    active.cloud_key = view.cloud_key;
+    active.device_key_pem = view.device_key_pem;
+    active.device_cert_pem = view.device_cert_pem;
+    active.device_fingerprint = view.device_fingerprint;
+    active.last_login_failed_at = view.last_login_failed_at;
+
+    nlohmann::json links = nlohmann::json::object();
+    for (const auto &entry : view.links) {
+        links[entry.first] = link_to_json(entry.second);
+    }
+    return nlohmann::json{
+        {"version", 2},
+        {"language", view.language},
+        {"welcome", view.welcome},
+        {"humor", view.humor},
+        {"active_link", view.active_link},
+        {"links", links},
+        {"mode", view.mode},
+        {"token", view.token},
+        {"user_id", view.user_id},
+        {"username", view.username},
+        {"device_pass", view.device_pass},
+        {"cloud_key", view.cloud_key},
+        {"server", view.server},
+        {"proxy", view.proxy},
+        {"trust", view.trust},
+        {"device_key_pem", view.device_key_pem},
+        {"device_cert_pem", view.device_cert_pem},
+        {"device_fingerprint", view.device_fingerprint},
+        {"opsec_ack", view.opsec_ack},
+        {"last_login_failed_at", view.last_login_failed_at},
+        {"created_at", view.created_at},
+        {"updated_at", view.updated_at},
     };
 }
 
@@ -215,29 +301,60 @@ VaultData from_json(const nlohmann::json &value) {
     }
     VaultData data;
     data.version = value.value("version", 1);
-    if (data.version != 1) {
+    if (data.version != 1 && data.version != 2) {
         throw VaultCorruptError("unsupported vault payload version");
     }
-    data.token = value.value("token", std::string{});
-    data.user_id = value.value("user_id", std::string{});
-    data.username = value.value("username", std::string{});
-    data.device_pass = value.value("device_pass", std::string{});
-    data.cloud_key = value.value("cloud_key", std::string{});
-    data.server = value.value("server", std::string{"https://hrt.mahiro.uk"});
-    data.proxy = value.value("proxy", std::string{});
+    data.language = value.value("language", std::string{"en"});
+    data.welcome = value.value("welcome", std::string{});
+    data.humor = value.value("humor", true);
     if (value.contains("trust") && value.at("trust").is_object()) {
         data.trust = value.at("trust");
     } else {
         data.trust = nlohmann::json::object();
     }
-    data.device_key_pem = value.value("device_key_pem", std::string{});
-    data.device_cert_pem = value.value("device_cert_pem", std::string{});
-    data.device_fingerprint = value.value("device_fingerprint", std::string{});
     data.opsec_ack = value.value("opsec_ack", false);
-    data.last_login_failed_at =
-        value.value("last_login_failed_at", static_cast<int64_t>(0));
     data.created_at = value.value("created_at", static_cast<int64_t>(0));
     data.updated_at = value.value("updated_at", static_cast<int64_t>(0));
+
+    if (data.version == 1) {
+        LinkData base;
+        base.url = value.value("server", std::string{"https://hrt.mahiro.uk"});
+        base.proxy = value.value("proxy", std::string{});
+        base.mode = value.value("mode", std::string{});
+        base.token = value.value("token", std::string{});
+        base.user_id = value.value("user_id", std::string{});
+        base.username = value.value("username", std::string{});
+        base.device_pass = value.value("device_pass", std::string{});
+        base.cloud_key = value.value("cloud_key", std::string{});
+        base.device_key_pem = value.value("device_key_pem", std::string{});
+        base.device_cert_pem = value.value("device_cert_pem", std::string{});
+        base.device_fingerprint = value.value("device_fingerprint", std::string{});
+        base.last_login_failed_at =
+            value.value("last_login_failed_at", static_cast<int64_t>(0));
+        data.links[""] = base;
+        data.active_link = "";
+        data.version = 2;
+        copy_link_to_view(base, data);
+        return data;
+    }
+
+    if (!value.contains("links") || !value.at("links").is_object()) {
+        throw VaultCorruptError("vault payload v2 has no links object");
+    }
+    data.links.clear();
+    for (auto it = value.at("links").begin(); it != value.at("links").end(); ++it) {
+        data.links[it.key()] = link_from_json(it.value());
+    }
+    data.active_link = value.value("active_link", std::string{});
+    if (!data.active_link.empty() && data.links.count(data.active_link) == 0) {
+        throw VaultCorruptError("vault active link is missing");
+    }
+    if (data.links.count("") == 0) {
+        LinkData base;
+        base.url = "https://hrt.mahiro.uk";
+        data.links[""] = base;
+    }
+    copy_link_to_view(data.links[data.active_link], data);
     return data;
 }
 
@@ -364,6 +481,14 @@ SealedVault seal(const VaultData &data, const std::string &password,
 
 } // namespace
 
+nlohmann::json vault_data_to_json(const VaultData &data) {
+    return to_json(data);
+}
+
+VaultData vault_data_from_json(const nlohmann::json &value) {
+    return from_json(value);
+}
+
 VaultSession::VaultSession(VaultData value, std::array<uint8_t, 32> key_value)
     : data(std::move(value)), key(key_value), log_key(derive_log_key(key_value)) {}
 
@@ -399,6 +524,20 @@ void VaultSession::wipe() {
     wipe_string(data.username);
     wipe_string(data.device_pass);
     wipe_string(data.cloud_key);
+    wipe_string(data.device_key_pem);
+    wipe_string(data.device_cert_pem);
+    wipe_string(data.device_fingerprint);
+    for (auto &entry : data.links) {
+        LinkData &link = entry.second;
+        wipe_string(link.token);
+        wipe_string(link.user_id);
+        wipe_string(link.username);
+        wipe_string(link.device_pass);
+        wipe_string(link.cloud_key);
+        wipe_string(link.device_key_pem);
+        wipe_string(link.device_cert_pem);
+        wipe_string(link.device_fingerprint);
+    }
     hrtcore_secure_zero(key.data(), key.size());
     hrtcore_secure_zero(log_key.data(), log_key.size());
     key.fill(0);
@@ -435,7 +574,10 @@ VaultSession Vault::create(const std::filesystem::path &path, const std::string 
     ensure_parent_dir(path);
 
     VaultData data;
-    data.version = 1;
+    data.version = 2;
+    data.active_link = "";
+    data.links[""] = LinkData{};
+    data.links[""].url = data.server;
     data.created_at = now_seconds();
     data.updated_at = data.created_at;
 

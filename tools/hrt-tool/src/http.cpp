@@ -1,9 +1,11 @@
 #include "http.h"
 
 #include "error.h"
+#include "net_error.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>
 #include <cstring>
 #include <mutex>
@@ -416,6 +418,52 @@ void validate_proxy_url(const std::string &proxy) {
     }
 }
 
+void validate_hidden_service_host(const Url &url) {
+    if (is_onion_host(url.host) && !valid_onion_v3(url.host)) {
+        throw ToolError(ExitCode::Usage, "ONION_ADDRESS",
+                        "a Tor v3 onion address is 56 base32 characters followed by .onion");
+    }
+    if (is_i2p_host(url.host) && !valid_i2p_host(url.host)) {
+        throw ToolError(ExitCode::Usage, "I2P_ADDRESS",
+                        "invalid I2P host name");
+    }
+}
+
+void validate_server_target(const std::string &server) {
+    const Url url = parse_url(server);
+    if (url.scheme == "hrt") {
+        if (!url.path.empty() && url.path != "/") {
+            throw ToolError(ExitCode::Usage, "HRT_URL",
+                            "an hrt:// server URL has no path");
+        }
+    } else if (url.scheme == "https" || url.scheme == "http") {
+        validate_server_url(url);
+    } else {
+        throw ToolError(ExitCode::Usage, "SERVER_URL",
+                        "server must use hrt://, https://, or a policy-limited http://");
+    }
+    validate_hidden_service_host(url);
+}
+
+std::string normalize_proxy_url(const std::string &proxy, std::ostream *note) {
+    const Url url = parse_url(proxy);
+    if (url.scheme != "socks5" && url.scheme != "socks5h") {
+        throw ToolError(ExitCode::Usage, "PROXY_URL",
+                        "proxy must use socks5:// or socks5h://; http, https, "
+                        "and socks4 proxies are refused");
+    }
+    std::string host = url.host;
+    if (host.find(':') != std::string::npos) {
+        host = "[" + host + "]";
+    }
+    const std::string port = url.port.empty() ? "1080" : url.port;
+    if (note != nullptr && url.scheme == "socks5") {
+        *note << "note: socks5:// is handled as socks5h:// so DNS stays at the "
+                 "proxy\n";
+    }
+    return "socks5h://" + host + ":" + port;
+}
+
 bool is_onion_host(const std::string &host) {
     const std::string name = lower_ascii(host);
     return name.size() > 6 && name.compare(name.size() - 6, 6, ".onion") == 0;
@@ -637,7 +685,7 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
         curl_easy_setopt(curl, CURLOPT_PROXY, "");
     }
 
-    if (options.trace) {
+    if (options.trace || options.debug) {
         curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
         curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debug_callback);
         curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &trace_context);
@@ -647,15 +695,17 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     if (result != CURLE_OK) {
         if (result == CURLE_SSL_PINNEDPUBKEYNOTMATCH) {
             /* The handshake was refused before the request body was sent. */
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "server public-key pin did not match; refusing the "
                             "request");
         }
         if (write_context.too_large) {
-            throw ToolError(ExitCode::Network, "HTTP_TOO_LARGE",
-                            "server response is larger than 16 MiB");
+            throw NetworkFailure("HTTP_TOO_LARGE",
+                                 "server response is larger than 16 MiB",
+                                 FailureKind::ServerInitiated);
         }
-        throw ToolError(ExitCode::Network, "HTTP", curl_easy_strerror(result));
+        throw NetworkFailure("HTTP", curl_easy_strerror(result),
+                             classify_curl(static_cast<int>(result), errno));
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
@@ -667,7 +717,7 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
            confirming the certificate we parsed. */
         if (!options.pinned_spki_sha256.empty() &&
             response.spki_sha256 != options.pinned_spki_sha256) {
-            throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+            throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                             "server public-key pin did not match; refusing the "
                             "response");
         }

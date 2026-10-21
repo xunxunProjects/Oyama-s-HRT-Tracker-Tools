@@ -570,8 +570,10 @@ int main() {
         const RunResult logout = run(with_vault({"logout"}), kPasswordLine);
         CHECK_EQ(logout.code, 0);
         CHECK(contains(logout.out, "not logged in"));
-        CHECK_EQ(run(with_vault({"whoami"}), kPasswordLine).code, 3);
-        CHECK_EQ(run(with_vault({"snapshot", "pull", "--out", "-"}), kPasswordLine).code, 3);
+        CHECK_EQ(run(with_vault({"whoami"}), kPasswordLine).code,
+                 static_cast<int>(ExitCode::Auth));
+        CHECK_EQ(run(with_vault({"snapshot", "pull", "--out", "-"}), kPasswordLine).code,
+                 static_cast<int>(ExitCode::Auth));
 
         const RunResult config_get = run(with_vault({"config", "get"}), kPasswordLine);
         CHECK_EQ(config_get.code, 0);
@@ -590,7 +592,7 @@ int main() {
             run({"look", "--config-dir", temp.path().string(),
                  "--vault-password-stdin"},
                 kPasswordLine);
-        CHECK_EQ(remote_look.code, 3);
+        CHECK_EQ(remote_look.code, static_cast<int>(ExitCode::Auth));
         CHECK(contains(remote_look.err, "log in first"));
 
         /* With a vault but no session, the live mutation commands ask for a
@@ -601,7 +603,7 @@ int main() {
             args.push_back(temp.path().string());
             args.push_back("--vault-password-stdin");
             const RunResult result = run(args, kPasswordLine);
-            CHECK_EQ(result.code, 3);
+            CHECK_EQ(result.code, static_cast<int>(ExitCode::Auth));
             CHECK(contains(result.err, "log in first"));
         }
         for (const char *command : {"export", "import"}) {
@@ -627,7 +629,7 @@ int main() {
         const RunResult result =
             run({"login", "--config-dir", temp.path().string(), "--vault-password-file",
                  password_file.string()});
-        CHECK_EQ(result.code, 3);
+        CHECK_EQ(result.code, static_cast<int>(ExitCode::Permission));
 
         const RunResult missing_log =
             run({"logs", "show", "--config-dir", temp.path().string(),
@@ -652,7 +654,7 @@ int main() {
             {"init", "--reset", "--config-dir", temp.path().string(),
              "--vault-password-stdin"},
             "no\n" + std::string(kPasswordLine));
-        CHECK_EQ(refused.code, 2);
+        CHECK_EQ(refused.code, static_cast<int>(ExitCode::Cancelled));
         CHECK(std::filesystem::exists(temp.path() / "vault.hrtv"));
 
         const RunResult reset = run(
@@ -791,7 +793,7 @@ int main() {
                 {"whoami", "--insecure-tls", "--vault-password-stdin",
                  "--config-dir", temp.path().string()},
                 kPasswordLine);
-            CHECK_EQ(whoami.code, 4);
+            CHECK_EQ(whoami.code, static_cast<int>(ExitCode::Trust));
             CHECK(contains(whoami.err, "TRUST_CHANGED"));
             CHECK_EQ(server.authenticated_requests(), 0);
 
@@ -822,7 +824,7 @@ int main() {
                 {"login", "--server", server.url(), "--username", "Alice",
                  "--vault-password-stdin", "--config-dir", temp.path().string()},
                 std::string(kPasswordLine) + "no\n");
-            CHECK_EQ(refused.code, 4);
+            CHECK_EQ(refused.code, static_cast<int>(ExitCode::Trust));
             CHECK(contains(refused.err, "TRUST_REFUSED"));
         }
 
@@ -844,14 +846,14 @@ int main() {
         CHECK_EQ(bad_onion.code, 2);
         CHECK(contains(bad_onion.err, "ONION_ADDRESS"));
 
-        /* Only socks5h may be configured: socks5 resolves DNS locally. */
-        const RunResult set_local_dns = run(
+        /* socks5:// is accepted and rewritten to socks5h:// so DNS stays
+           at the proxy. */
+        const RunResult set_socks5_alias = run(
             {"config", "set", "proxy", "socks5://127.0.0.1:9050",
              "--vault-password-stdin", "--config-dir", temp.path().string()},
             kPasswordLine);
-        CHECK_EQ(set_local_dns.code, 2);
-        CHECK(contains(set_local_dns.err, "PROXY_URL"));
-        CHECK(contains(set_local_dns.err, "socks5h"));
+        CHECK_EQ(set_socks5_alias.code, 0);
+        CHECK(contains(set_socks5_alias.out, "socks5h://127.0.0.1:9050"));
 
         const RunResult override_local_dns = run(
             {"login", "--server", "https://example.com", "--username", "Alice",
@@ -908,14 +910,14 @@ int main() {
             server.drop_login(false);
             server.fail_login(true);
             const RunResult first = run(args, kPasswordLine);
-            CHECK_EQ(first.code, 3);
+            CHECK_EQ(first.code, static_cast<int>(ExitCode::Auth));
             CHECK(contains(first.err, "INVALID_CREDENTIALS"));
             CHECK(!contains(first.err, "LOGIN_COOLDOWN"));
 
             /* The next invocation is refused locally, without another login
                request, until the 60-second window has passed. */
             const RunResult second = run(args, kPasswordLine);
-            CHECK_EQ(second.code, 3);
+            CHECK_EQ(second.code, static_cast<int>(ExitCode::Auth));
             CHECK(contains(second.err, "LOGIN_COOLDOWN"));
 
             {
@@ -924,7 +926,7 @@ int main() {
                 Vault::save(vault, session.data, master);
             }
             const RunResult third = run(args, kPasswordLine);
-            CHECK_EQ(third.code, 3);
+            CHECK_EQ(third.code, static_cast<int>(ExitCode::Auth));
             CHECK(contains(third.err, "INVALID_CREDENTIALS"));
             CHECK(!contains(third.err, "LOGIN_COOLDOWN"));
 

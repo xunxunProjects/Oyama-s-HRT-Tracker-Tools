@@ -1,10 +1,31 @@
 #include "cli.h"
 
 #include "commands.h"
+#include "console.h"
 #include "error.h"
+#include "net_error.h"
 
 #include <nlohmann/json.hpp>
+#include <cstdio>
 #include <string>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace {
+
+bool stdin_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return ::isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+} // namespace
 
 namespace {
 
@@ -20,6 +41,13 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
 
     for (int i = 1; i < argc; ++i) {
         const std::string token = argv[i];
+
+        /* f2f owns every token after the command: its flags overlap the
+           global names and have different semantics. */
+        if (command_seen && parsed.command == "f2f") {
+            parsed.command_args.push_back(token);
+            continue;
+        }
 
         if (token == "--") {
             for (++i; i < argc; ++i) {
@@ -89,6 +117,15 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
             } else if (name == "--yes") {
                 boolean_flag();
                 parsed.options.yes = true;
+            } else if (name == "--force") {
+                boolean_flag();
+                parsed.options.force = true;
+            } else if (name == "--probe") {
+                boolean_flag();
+                parsed.options.probe = true;
+            } else if (name == "--no-humor") {
+                boolean_flag();
+                parsed.options.no_humor = true;
             } else if (name == "--trust-server") {
                 boolean_flag();
                 parsed.options.trust_server = true;
@@ -172,10 +209,15 @@ static ParsedArgs parse_args(int argc, const char *const *argv) {
     return parsed;
 }
 
+ParsedArgs parse_cli_args(int argc, const char *const *argv) {
+    return parse_args(argc, argv);
+}
+
 void print_help(std::ostream &out) {
     out << "hrt-tool — Oyama HRT Tracker terminal client\n\n"
         << "Usage: hrt-tool [global flags] <command> [command flags]\n\n"
         << "Commands:\n"
+        << "  console              start the interactive console\n"
         << "  init                 create the encrypted local vault\n"
         << "  login                log in and store an encrypted session\n"
         << "  logout               revoke the session and forget the token\n"
@@ -184,6 +226,10 @@ void print_help(std::ostream &out) {
         << "  snapshot push        merge and upload a snapshot\n"
         << "  snapshot list        list stored revisions\n"
         << "  look                 show concentrations (remote, or from --snapshot)\n"
+        << "  status [all]         current and expected concentrations, plus labs\n"
+        << "  add-link URL NAME    save a named connection link\n"
+        << "  commit-server NAME   select a saved link (use - for the base link)\n"
+        << "  link list|show|...   manage saved links\n"
         << "  add                  add a dose\n"
         << "  dose ...             manage doses\n"
         << "  lab ...              manage labs\n"
@@ -194,11 +240,18 @@ void print_help(std::ostream &out) {
         << "  config set KEY VALUE change server or proxy\n"
         << "  config unset KEY     clear server or proxy\n"
         << "  config path          print config paths\n"
+        << "  proxy tor|i2p|off    set or clear the SOCKS proxy\n"
+        << "  proxy status|test    show or test the configured proxy\n"
+        << "  doctor               check the vault, proxy, and environment\n"
+        << "  completion SHELL     print bash/zsh/fish completion\n"
+        << "  help [command]       show help or the exit-code table\n"
+        << "  f2f ...              F2F keyring/OpenPGP commands\n"
         << "  logs show            decrypt an encrypted log file\n"
-        << "  version              print versions\n\n"
+        << "  version              print versions (--json for JSON)\n\n"
         << "Global flags:\n"
         << "  --server URL  --proxy URL  --config-dir DIR  --debug  --trace\n"
-        << "  --json  --no-color  --yes  --timeout SECONDS  --trust-server\n"
+        << "  --json  --no-color  --yes  --force  --probe  --no-humor\n"
+        << "  --timeout SECONDS  --trust-server\n"
         << "  --require-hrt  --device-name NAME\n"
         << "  --insecure-tls  --transport auto|tls|openssl-v1\n"
         << "  --no-cache-cloud-key  --compute local|server\n"
@@ -227,15 +280,78 @@ void print_help(std::ostream &out) {
         << "Plaintext is written only to stdout. All local state is encrypted at rest.\n";
 }
 
+void print_command_help(const std::string &command, std::ostream &out) {
+    if (command == "status") {
+        out << "usage: hrt-tool status [all] [--at LIST] [--labs N] "
+               "[--watch SECONDS] [--json]\n";
+    } else if (command == "add") {
+        out << "usage: hrt-tool add --drug NAME --time TIME --measurement DOSE "
+               "[--route ROUTE]\n"
+               "       hrt-tool add dose        interactive interview\n";
+    } else if (command == "look") {
+        out << "usage: hrt-tool look [--all] [--at LIST] [--labs N] [--json]\n";
+    } else if (command == "add-link") {
+        out << "usage: hrt-tool add-link URL NAME [--mode M] [--proxy P] "
+               "[--force] [--probe]\n";
+    } else if (command == "commit-server") {
+        out << "usage: hrt-tool commit-server NAME   (use - for the base link)\n";
+    } else if (command == "link") {
+        out << "usage: hrt-tool link list|show NAME|rename OLD NEW|remove NAME "
+               "[--yes] [--force]\n";
+    } else if (command == "proxy") {
+        out << "usage: hrt-tool proxy tor|i2p|off|status|test\n";
+    } else if (command == "config") {
+        out << "usage: hrt-tool config get|set|unset KEY [VALUE] | config path\n";
+    } else if (command == "snapshot") {
+        out << "usage: hrt-tool snapshot pull --out FILE | push --in FILE | list\n";
+    } else if (command == "f2f") {
+        out << "usage: hrt-tool f2f keygen|login|register|status|keyring|"
+               "encrypt|decrypt|version ...\n";
+    } else if (command == "doctor") {
+        out << "usage: hrt-tool doctor [--json]\n";
+    } else if (command == "completion") {
+        out << "usage: hrt-tool completion bash|zsh|fish\n";
+    } else if (command == "help") {
+        out << "usage: hrt-tool help [COMMAND|exit-codes]\n";
+    } else if (command == "console") {
+        out << "usage: hrt-tool console\n";
+    } else {
+        print_help(out);
+    }
+}
+
 int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &out,
             std::ostream &err) {
+    ParsedArgs parsed;
     try {
-        const ParsedArgs parsed = parse_args(argc, argv);
-        if (parsed.help || parsed.command.empty()) {
+        if (argc == 1 && stdin_is_tty()) {
+            return run_console(GlobalOptions{}, in, out, err);
+        }
+        parsed = parse_args(argc, argv);
+        if (parsed.help) {
+            if (!parsed.command.empty()) {
+                print_command_help(parsed.command, out);
+            } else {
+                print_help(out);
+            }
+            return 0;
+        }
+        if (parsed.command.empty()) {
             print_help(out);
             return 0;
         }
         return dispatch(parsed, in, out, err);
+    } catch (const NetworkFailure &error) {
+        if (should_print_human_line(parsed.options.debug, parsed.options.trace,
+                                    parsed.options.no_humor, humor_enabled())) {
+            const std::string human =
+                failure_human_line(Language::En, error.kind());
+            if (!human.empty()) {
+                err << human << "\n";
+            }
+        }
+        err << "hrt-tool: " << error.what() << " [" << error.code() << "]\n";
+        return static_cast<int>(error.exit_code());
     } catch (const ToolError &error) {
         err << "hrt-tool: " << error.what() << " [" << error.code() << "]\n";
         return static_cast<int>(error.exit_code());
@@ -244,6 +360,6 @@ int run_cli(int argc, const char *const *argv, std::istream &in, std::ostream &o
         return static_cast<int>(ExitCode::Data);
     } catch (const std::exception &error) {
         err << "hrt-tool: " << error.what() << "\n";
-        return 1;
+        return static_cast<int>(ExitCode::Internal);
     }
 }

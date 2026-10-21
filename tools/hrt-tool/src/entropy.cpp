@@ -460,7 +460,8 @@ std::string strip_leading_symbols(const std::string &text) {
     size_t start = 0;
     while (start < text.size()) {
         const unsigned char c = static_cast<unsigned char>(text[start]);
-        if (c > 0x7E || !is_symbol_cp(c) && !is_ascii_digit(static_cast<char>(c))) {
+        if (c > 0x7E ||
+            !(is_symbol_cp(c) || is_ascii_digit(static_cast<char>(c)))) {
             break;
         }
         ++start;
@@ -472,7 +473,8 @@ std::string strip_trailing_symbols(const std::string &text) {
     size_t end = text.size();
     while (end > 0) {
         const unsigned char c = static_cast<unsigned char>(text[end - 1]);
-        if (c > 0x7E || !is_symbol_cp(c) && !is_ascii_digit(static_cast<char>(c))) {
+        if (c > 0x7E ||
+            !(is_symbol_cp(c) || is_ascii_digit(static_cast<char>(c)))) {
             break;
         }
         --end;

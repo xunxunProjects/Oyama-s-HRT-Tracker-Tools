@@ -2,6 +2,7 @@
 
 #include "hrt_client.h"
 #include "http.h"
+#include "net_error.h"
 
 #include <algorithm>
 #include <string>
@@ -232,6 +233,10 @@ void throw_http_status(long status, const std::string &body, const char *what) {
                                     : error_message(parsed);
     if (status == 401 || status == 403) {
         throw ApiAuthError(code, message);
+    }
+    const FailureKind kind = classify_http(status);
+    if (kind != FailureKind::None) {
+        throw NetworkFailure(code, message, kind);
     }
     throw ToolError(ExitCode::Network, code, message);
 }

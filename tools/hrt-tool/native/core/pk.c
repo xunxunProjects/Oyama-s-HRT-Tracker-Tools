@@ -62,11 +62,6 @@ static const double kCpaKa = 0.5;
 static const double kCpaWFast = 5.2786;
 static const double kCpaF = 0.88;
 
-static const double kSlQuick = 0.01;
-static const double kSlCasual = 0.04;
-static const double kSlStandard = 0.11;
-static const double kSlStrict = 0.18;
-
 static const double kPeriEventOffsets[] = {0.25, 0.5, 1.0, 2.0, 4.0,
                                            6.0,  8.0, 12.0, 24.0, 48.0};
 

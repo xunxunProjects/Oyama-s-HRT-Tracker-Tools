@@ -27,13 +27,13 @@ struct Snapshot {
 class ApiAuthError : public ToolError {
 public:
     ApiAuthError(const std::string &code, const std::string &message)
-        : ToolError(ExitCode::Vault, code, message) {}
+        : ToolError(ExitCode::Auth, code, message) {}
 };
 
 class ApiTwoFactorRequired : public ToolError {
 public:
     explicit ApiTwoFactorRequired(std::string method)
-        : ToolError(ExitCode::Vault, "TWO_FACTOR_REQUIRED",
+        : ToolError(ExitCode::Auth, "TWO_FACTOR_REQUIRED",
                     "a second factor is required (" + method + ")"),
           method_(std::move(method)) {}
 
@@ -46,7 +46,7 @@ private:
 class SnapshotConflictError : public ToolError {
 public:
     SnapshotConflictError(std::string current_id, int64_t current_created_at)
-        : ToolError(ExitCode::Data, "CONFLICT", "snapshot changed; merge and retry"),
+        : ToolError(ExitCode::Conflict, "CONFLICT", "snapshot changed; merge and retry"),
           current_id_(std::move(current_id)),
           current_created_at_(current_created_at) {}
 

@@ -19,6 +19,9 @@ struct GlobalOptions {
     bool json = false;
     bool no_color = false;
     bool yes = false;
+    bool force = false;
+    bool probe = false;
+    bool no_humor = false;
     long timeout_s = 30;
     bool trust_server = false;
     bool insecure_tls = false;
@@ -43,7 +46,15 @@ struct ParsedArgs {
     bool help = false;
 };
 
-int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out, std::ostream &err);
+struct SessionContext;
+
+int dispatch(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+             std::ostream &err, SessionContext *context = nullptr);
+
+int command_proxy(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                  std::ostream &err, SessionContext *context);
+int command_doctor(const ParsedArgs &parsed, std::istream &in, std::ostream &out,
+                   std::ostream &err, SessionContext *context);
 
 std::string read_vault_password(const GlobalOptions &options, std::istream &in,
                                 std::ostream &out, bool confirm);

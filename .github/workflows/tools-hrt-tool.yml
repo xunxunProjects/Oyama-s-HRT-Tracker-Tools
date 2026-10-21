@@ -6,12 +6,15 @@ on:
       - main
       - "Recovery/Tools"
       - "feat/hrt-tool"
+      - "feat/hrt-tool-console"
     paths:
       - "tools/hrt-tool/**"
+      - "tools/hrt-f2f/**"
       - ".github/workflows/tools-hrt-tool.yml"
   pull_request:
     paths:
       - "tools/hrt-tool/**"
+      - "tools/hrt-f2f/**"
       - ".github/workflows/tools-hrt-tool.yml"
   workflow_dispatch:
 
@@ -38,10 +41,23 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
       # CMake builds the printer with `cargo build --offline`; a clean runner
       # has an empty registry, so fetch the locked dependencies first.
       - name: Fetch Rust dependencies
         run: cargo fetch --locked --manifest-path tools/hrt-tool/rust/hrt-print/Cargo.toml
+
+      - name: Fetch Go dependencies
+        run: go mod download
+        working-directory: tools/hrt-f2f
+
+      - name: Go F2F tests
+        run: GOPROXY=off go test -count=1 ./...
+        working-directory: tools/hrt-f2f
 
       - name: Configure
         run: cmake -S tools/hrt-tool -B tools/hrt-tool/build -DCMAKE_BUILD_TYPE=Release
@@ -51,6 +67,53 @@ jobs:
 
       - name: Test
         run: ctest --test-dir tools/hrt-tool/build --output-on-failure
+
+      - name: Install smoke test
+        run: |
+          sh tools/hrt-tool/scripts/install-smoke.sh \
+            tools/hrt-tool/build "$RUNNER_TEMP/hrt-stage"
+
+      - name: Warnings-as-errors build
+        run: |
+          cmake -S tools/hrt-tool -B "$RUNNER_TEMP/hrt-werror" \
+            -DCMAKE_BUILD_TYPE=Release -DHRT_TOOL_ENABLE_WERROR=ON
+          cmake --build "$RUNNER_TEMP/hrt-werror" --parallel
+          ctest --test-dir "$RUNNER_TEMP/hrt-werror" --output-on-failure
+
+  sanitizers:
+    name: Linux ASan/UBSan (F2F off)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libssl-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Fetch Rust dependencies
+        run: cargo fetch --locked --manifest-path tools/hrt-tool/rust/hrt-print/Cargo.toml
+
+      - name: Configure
+        run: |
+          cmake -S tools/hrt-tool -B "$RUNNER_TEMP/hrt-asan" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DHRT_TOOL_ENABLE_F2F=OFF \
+            -DHRT_TOOL_ENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: cmake --build "$RUNNER_TEMP/hrt-asan" --parallel
+
+      - name: Test
+        run: ctest --test-dir "$RUNNER_TEMP/hrt-asan" --output-on-failure
 
   windows-followup:
     name: Windows (follow-up, non-blocking)
@@ -63,6 +126,7 @@ jobs:
           persist-credentials: false
 
       # The C/C++/Rust Windows build (MSVC + vcpkg for OpenSSL/libcurl) is
-      # enabled in M4. This job is deliberately non-blocking in M1.
+      # enabled in M4. The Go F2F c-archive is not available under MSVC, so the
+      # Windows follow-up builds with -DHRT_TOOL_ENABLE_F2F=OFF.
       - name: Placeholder
-        run: echo "Windows build is enabled in M4; see tools/hrt-tool/README.md."
+        run: echo "Windows follow-up is non-blocking; see tools/hrt-tool/README.md."

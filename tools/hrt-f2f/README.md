@@ -5,6 +5,14 @@ It generates keys, encrypts to a cohort's members (and optional escrow key),
 and decrypts locally. It is separate from `hrt-cold` (offline backups) and
 `hrt-tool` (account transport); it never uploads a private key.
 
+**Merged into `hrt-tool`.** The installed surface is now
+`hrt-tool f2f keygen|login|register|status|keyring|encrypt|decrypt|version`;
+the Go implementation is compiled as a `c-archive` and linked into the
+single `hrt-tool` binary. The standalone `hrt-f2f` build in this directory
+remains for development and tests. F2F still uses its own `--server`,
+`--proxy`, and `--token-file`; it never reads the account vault or a saved
+link.
+
 ## Security model
 
 - Private keys are created locally and stored only in the files you choose.

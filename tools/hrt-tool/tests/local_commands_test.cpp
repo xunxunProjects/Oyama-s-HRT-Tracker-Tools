@@ -1,4 +1,5 @@
 #include "cli.h"
+#include "error.h"
 #include "test_framework.h"
 
 #include <atomic>
@@ -360,7 +361,7 @@ int main() {
                                       "--vault-password-file", vault_file.string()};
         args.insert(args.end(), base.begin(), base.end());
         const RunResult refused = run(args, "no\n");
-        CHECK_EQ(refused.code, 2);
+        CHECK_EQ(refused.code, static_cast<int>(ExitCode::Cancelled));
     }
 
     {

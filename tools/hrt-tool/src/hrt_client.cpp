@@ -3,6 +3,7 @@
 #include "error.h"
 #include "hrt_protocol.h"
 #include "http.h"
+#include "net_error.h"
 
 #include <openssl/asn1.h>
 #include <openssl/err.h>
@@ -157,20 +158,25 @@ int connect_tcp(const std::string &host, const std::string &port, long timeout_s
     addrinfo *addresses = nullptr;
     const int resolved = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &addresses);
     if (resolved != 0 || addresses == nullptr) {
-        throw ToolError(ExitCode::Network, "HRT_DNS",
-                        "cannot resolve " + host);
+        throw NetworkFailure("HRT_DNS", "cannot resolve " + host,
+                             FailureKind::FinalFallback);
     }
     int connected = -1;
+    int last_error = 0;
     for (addrinfo *address = addresses; address != nullptr;
          address = address->ai_next) {
         const int fd = ::socket(address->ai_family, address->ai_socktype,
                                 address->ai_protocol);
         if (fd < 0) {
+            last_error = errno;
             continue;
         }
         const int flags = ::fcntl(fd, F_GETFL, 0);
         ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
         int result = ::connect(fd, address->ai_addr, address->ai_addrlen);
+        if (result != 0) {
+            last_error = errno;
+        }
         if (result != 0 && errno == EINPROGRESS) {
             pollfd wait{};
             wait.fd = fd;
@@ -182,8 +188,12 @@ int connect_tcp(const std::string &host, const std::string &port, long timeout_s
                 socklen_t length = sizeof(error);
                 ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length);
                 result = error == 0 ? 0 : -1;
+                if (error != 0) {
+                    last_error = error;
+                }
             } else {
                 result = -1;
+                last_error = ETIMEDOUT;
             }
         }
         if (result == 0) {
@@ -196,8 +206,12 @@ int connect_tcp(const std::string &host, const std::string &port, long timeout_s
     }
     ::freeaddrinfo(addresses);
     if (connected < 0) {
-        throw ToolError(ExitCode::Network, "HRT_CONNECT",
-                        "cannot connect to " + host + ":" + port);
+        FailureKind kind = classify_errno(last_error);
+        if (kind == FailureKind::None) {
+            kind = FailureKind::TunnelInterrupted;
+        }
+        throw NetworkFailure("HRT_CONNECT",
+                             "cannot connect to " + host + ":" + port, kind);
     }
     return connected;
 }
@@ -233,18 +247,28 @@ int socks5_connect(const std::string &proxy, const std::string &host,
         throw ToolError(ExitCode::Usage, "PROXY_URL",
                         "the raw transport requires a socks5h:// proxy");
     }
-    const int fd = connect_tcp(proxy_url.host, proxy_url.port, timeout_s);
+    int fd = 0;
+    try {
+        fd = connect_tcp(proxy_url.host, proxy_url.port, timeout_s);
+    } catch (const ToolError &error) {
+        throw NetworkFailure(
+            "HRT_PROXY",
+            "cannot connect to the SOCKS5 proxy: " + std::string(error.what()),
+            FailureKind::ProxyDown);
+    }
     const unsigned char greeting[3] = {0x05, 0x01, 0x00};
     if (!write_exact(fd, greeting, sizeof(greeting))) {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY", "cannot write the SOCKS5 greeting");
+        throw NetworkFailure("HRT_PROXY", "cannot write the SOCKS5 greeting",
+                             FailureKind::TunnelInterrupted);
     }
     unsigned char method[2] = {};
     if (!read_exact_fd(fd, method, sizeof(method)) || method[0] != 0x05 ||
         method[1] != 0x00) {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY",
-                        "the SOCKS5 proxy refused authentication");
+        throw NetworkFailure("HRT_PROXY",
+                             "the SOCKS5 proxy refused authentication",
+                             FailureKind::ProxyDown);
     }
     if (host.empty() || host.size() > 255) {
         ::close(fd);
@@ -263,14 +287,19 @@ int socks5_connect(const std::string &proxy, const std::string &host,
     if (!write_exact(fd, reinterpret_cast<const unsigned char *>(request.data()),
                      request.size())) {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY", "cannot write the SOCKS5 request");
+        throw NetworkFailure("HRT_PROXY", "cannot write the SOCKS5 request",
+                             FailureKind::TunnelInterrupted);
     }
     unsigned char reply[4] = {};
     if (!read_exact_fd(fd, reply, sizeof(reply)) || reply[0] != 0x05 ||
         reply[1] != 0x00) {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY",
-                        "the SOCKS5 proxy could not reach the target");
+        FailureKind kind = classify_socks5(reply[1]);
+        if (kind == FailureKind::None) {
+            kind = FailureKind::TunnelInterrupted;
+        }
+        throw NetworkFailure("HRT_PROXY",
+                             "the SOCKS5 proxy could not reach the target", kind);
     }
     size_t extra = 0;
     if (reply[3] == 0x01) {
@@ -281,18 +310,21 @@ int socks5_connect(const std::string &proxy, const std::string &host,
         unsigned char length = 0;
         if (!read_exact_fd(fd, &length, 1)) {
             ::close(fd);
-            throw ToolError(ExitCode::Network, "HRT_PROXY", "truncated SOCKS5 reply");
+            throw NetworkFailure("HRT_PROXY", "truncated SOCKS5 reply",
+                                 FailureKind::TunnelInterrupted);
         }
         extra = length;
     } else {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY", "invalid SOCKS5 reply");
+        throw NetworkFailure("HRT_PROXY", "invalid SOCKS5 reply",
+                             FailureKind::TunnelInterrupted);
     }
     unsigned char discard[256 + 2] = {};
     if (extra + 2 > sizeof(discard) ||
         !read_exact_fd(fd, discard, extra + 2)) {
         ::close(fd);
-        throw ToolError(ExitCode::Network, "HRT_PROXY", "truncated SOCKS5 reply");
+        throw NetworkFailure("HRT_PROXY", "truncated SOCKS5 reply",
+                             FailureKind::TunnelInterrupted);
     }
     return fd;
 }
@@ -658,8 +690,8 @@ HrtServerCertificate HrtClient::connect() {
     if (SSL_connect(impl_->ssl) != 1) {
         const std::string detail = openssl_error();
         impl_->close();
-        throw ToolError(ExitCode::Network, "HRT_TLS",
-                        "TLS handshake failed: " + detail);
+        throw NetworkFailure("HRT_TLS", "TLS handshake failed: " + detail,
+                             FailureKind::TunnelInterrupted);
     }
     const unsigned char *selected = nullptr;
     unsigned int selected_length = 0;
@@ -690,7 +722,7 @@ HrtServerCertificate HrtClient::connect() {
     if (!impl_->options.expected_spki.empty() &&
         impl_->certificate.spki_sha256 != impl_->options.expected_spki) {
         impl_->close();
-        throw ToolError(ExitCode::Network, "TRUST_CHANGED",
+        throw ToolError(ExitCode::Trust, "TRUST_CHANGED",
                         "the raw server public-key pin changed");
     }
     impl_->connected = true;
@@ -721,7 +753,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int written = SSL_write(impl_->ssl, frame.data() + offset,
                                       static_cast<int>(frame.size() - offset));
         if (written <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot write the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot write the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         offset += static_cast<size_t>(written);
     }
@@ -731,7 +764,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int got = SSL_read(impl_->ssl, header + read,
                                  static_cast<int>(sizeof(header) - read));
         if (got <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot read the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot read the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         read += static_cast<size_t>(got);
     }
@@ -748,7 +782,8 @@ nlohmann::json HrtClient::call(const nlohmann::json &message) {
         const int got = SSL_read(impl_->ssl, &payload[read],
                                  static_cast<int>(payload.size() - read));
         if (got <= 0) {
-            throw ToolError(ExitCode::Network, "HRT_IO", "cannot read the hrt frame");
+            throw NetworkFailure("HRT_IO", "cannot read the hrt frame",
+                                 FailureKind::TunnelInterrupted);
         }
         read += static_cast<size_t>(got);
     }
