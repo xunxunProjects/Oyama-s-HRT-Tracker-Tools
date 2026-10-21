@@ -34,6 +34,27 @@ hrt-tool config path
 server policy, trust pins, payload version, and component versions. It does not
 print secrets.
 
+## Common errors
+
+| Message | Exit | Fix |
+| --- | --- | --- |
+| `NOT_LOGGED_IN` | 7 | Run `hrt-tool login`, or pass `--snapshot FILE` to work on a local snapshot. |
+| `SNAPSHOT_REQUIRED` | 2 | `export` and `import` always need `--snapshot FILE`. Run `snapshot pull --out FILE` first. |
+| `USER_ID_REQUIRED` | 2 | An encrypted snapshot also needs `--user-id ID` and the account password. |
+| `SNAPSHOT_CREDENTIALS` | 2 | Local changes are written only to an encrypted snapshot; pass `--user-id` and the account password. |
+| `MODE_REQUIRED` | 2 | Pass `--mode transfem` or `--mode transmasc`. Live commands and the console also use the mode saved with `config set mode`. |
+| `NO_SNAPSHOT` | 5 | The account has no cloud snapshot yet. Save data with cloud sync in the web app first. |
+| `TIME`, `DURATION` | 2 | Use a format from [Time input](hrt-tool-Reference#time-input). |
+| `SERVER_MISMATCH` | 8 | The session belongs to another server. Use `login --server URL` to switch. |
+| `HRT_URL` | 2 | An `hrt://` server URL takes no path: `hrt://HOST[:PORT]`. |
+| `HRT_REQUIRED` | 2 | `--require-hrt` was given but the server is not `hrt://`. |
+| `PROXY_URL` | 2 | Only `socks5h://` and `socks5://` proxy URLs are accepted. |
+| `TOR_PROXY_MISSING`, `I2P_PROXY_MISSING` | 4 | `.onion` and `.i2p` need a proxy: run `proxy tor` or `proxy i2p`. |
+| `EXPORT_EXISTS` | 3 | `export` never replaces a file; choose a new `--out` path. |
+| `LINK_ACTIVE` | 10 | Pass `--force` to remove the active link; the base link becomes active. |
+| `CONFIG_KEY`, `CONFIG_VALUE` | 12 | See [Configuration keys](hrt-tool-Reference#configuration-keys). |
+| `TRANSPORT_SELECTION`, `NOT_IMPLEMENTED` | 6 | `openssl-v1` and server compute are reserved. The transport follows the server URL. |
+
 ## Vault
 
 | Message | Fix |
@@ -45,9 +66,12 @@ print secrets.
 
 ## Trust
 
-`TRUST_CHANGED` means the server's pinned SPKI key changed. Do not re-trust
-blindly. Verify the server out of band, then use `--trust-server` (persist) or
-`--yes` (current run only) after confirming the new key.
+`TRUST_CHANGED` (exit 8) means the server presented a different public key from
+the one pinned for that host and port. It can be a planned key rotation or an
+interception, so do not re-trust blindly. Confirm the new SPKI SHA-256 with the
+server operator out of band, then re-run the command with `--trust-server`.
+`--yes` never accepts a changed key. A renewed certificate with the same key
+keeps working without any action.
 
 ## Network and proxy
 
@@ -55,7 +79,9 @@ blindly. Verify the server out of band, then use `--trust-server` (persist) or
 - Use `socks5h://` or `socks5://` (rewritten to `socks5h`); HTTP(S) and SOCKS4
   proxies are refused.
 - Environment proxy variables are ignored. Set the proxy explicitly with
-  `proxy tor`, `proxy i2p`, or `proxy socks5://…`.
+  `proxy tor`, `proxy i2p`, or `config set proxy socks5h://HOST:PORT`. The
+  `proxy` command itself accepts only `tor`, `i2p`, `off`, `status`, and
+  `test`.
 - `--debug` or `--trace` prints raw connection diagnostics, disables retries,
   and suppresses the human failure line.
 - Read commands retry a tunnel interruption twice. Mutations never auto-retry;
@@ -88,8 +114,9 @@ The log file and the vault are separate; keep both if you need support.
 
 ## Reporting
 
-Do not include real health data, keys, tokens, or passphrases. Follow
-[`SECURITY.md`](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/blob/main/SECURITY.md).
+Do not include real health data, keys, tokens, or passphrases in an issue.
+Report security problems privately; see
+[Reporting Vulnerabilities](Reporting-Vulnerabilities).
 
 ## Canonical sources
 

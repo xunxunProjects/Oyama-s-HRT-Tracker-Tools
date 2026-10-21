@@ -2,16 +2,18 @@
 
 The face-to-face (F2F) commands create member-owned OpenPGP keys, upload only
 public keys, download the cohort keyring, and encrypt or decrypt locally. The
-implementation is Go/OpenPGP, linked into `hrt-tool` as a c-archive.
+implementation is Go/OpenPGP, linked into `hrt-tool` as a c-archive. The
+standalone `hrt-f2f` binary takes the same subcommands and flags.
 
-Private keys are never sent to the server. The installed surface is:
+Your private key is never sent to the server. The installed surface is:
 
 ```text
 hrt-tool f2f keygen|login|register|status|keyring|encrypt|decrypt|version
 ```
 
-F2F has its own `--server`, `--proxy`, and `--token-file`. It never reads or
-inherits the account vault's link, token, proxy, or mode.
+F2F has its own `--server`, `--proxy`, `--token-file`, and `--timeout`. It never
+reads or inherits the account vault's link, token, proxy, or mode. `--proxy`
+takes `socks5h://HOST:PORT`; `socks5://` is rewritten to `socks5h://`.
 
 ## Key generation
 
@@ -26,12 +28,13 @@ hrt-tool f2f keygen \
 ```
 
 Passphrase and token files must be mode `0600` on Unix. Windows relies on the
-file ACL.
+file ACL. A passphrase must be at least 12 bytes. The tool checks only the
+length, so choose a long, unique passphrase. Never upload the private key file.
 
 ## Register and log in
 
 Upload `alice-public.asc` and its fingerprint in **Account → F2F keyring** on
-the web app, or use a one-time login code from the same page:
+the web app, or get a one-time login code from the same page:
 
 ```sh
 hrt-tool f2f login --server https://hrt.example.org \
@@ -40,13 +43,59 @@ hrt-tool f2f register --server https://hrt.example.org --token-file token \
   --public-key alice-public.asc
 ```
 
-`--code-file FILE` can replace `--code CODE`. Then fetch the cohort keyring:
+- The code is 32 hex characters, works once, and expires after 10 minutes.
+  Generating a new code invalidates the previous one.
+- `--code-file FILE` can replace `--code CODE` and keeps the code out of shell
+  history.
+- The token file is written with mode `0600`. The token works only for the F2F
+  endpoints and expires after 7 days. It appears as `hrt-f2f CLI` under
+  **Account → Active Sessions**, where you can revoke it.
+
+## Cohort keyring
 
 ```sh
 hrt-tool f2f status --server https://hrt.example.org --token-file token
 hrt-tool f2f keyring pull --server https://hrt.example.org --token-file token \
   --out cohort-keyring.asc
+hrt-tool f2f keyring list cohort-keyring.asc
 ```
+
+| Command | Result |
+| --- | --- |
+| `status` | Cohort, seat, active key, and the cohort escrow key fingerprint when there is one. |
+| `keyring pull --out FILE` | The cohort keyring, saved as armored public keys. |
+| `keyring list FILE` | Each fingerprint with its user IDs. |
+| `keyring merge --out FILE FILE...` | One keyring from several files, without duplicates. |
+
+## Cohort escrow keys
+
+A server operator can turn on cohort escrow. The operator generates one
+OpenPGP key pair per cohort offline and provisions it to the server. This is
+the operator's key, not yours: members' own private keys are never escrowed or
+uploaded. The tool uses only the escrow public key and cannot recover an
+escrowed message. Ask the operator who holds the escrow private key and when it
+may be used.
+
+When a cohort has an escrow key:
+
+- `f2f status` prints `escrow key: <fingerprint>`.
+- The keyring from `keyring pull` contains the member keys **and the cohort
+  escrow public key**.
+- `f2f encrypt` encrypts to every key in every `--recipient` file. Encrypting to
+  the pulled keyring therefore also encrypts to the escrow key, even without
+  `--escrow`. Check the `encrypted for:` line before you send the file.
+- `--escrow FILE` adds an escrow public key explicitly.
+
+To encrypt for members only, build the recipient file from the members' own
+public key files, for example with `keyring merge`, and compare its
+fingerprints with `keyring list` and `status` first.
+
+<!-- DRAFT (Phase 1, static read only): the keyring export behaviour comes from
+main repo f2f.ts cohortKeyring (appends the escrow key) and tools/hrt-f2f
+crypto.go encryptF2F (uses every recipient key). tools/hrt-f2f/README.md calls
+the pulled keyring "member-only" and says to add escrow explicitly. Confirm on
+an isolated test instance before publishing this page, and decide whether the
+client should filter or ask before encrypting to an escrow key. -->
 
 ## Encrypt and decrypt
 
@@ -56,12 +105,22 @@ hrt-tool f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
   --in message.asc --out message.txt
 ```
 
-`--recipient` is repeatable. Use `--signer-private` and
-`--signer-passphrase-file` to sign inside the encrypted message.
+- `--recipient` is repeatable and takes a public key or a keyring file. One
+  encryption accepts at most 100 keys and 1 MiB of armored key data across all
+  recipient files.
+- Expired, revoked, and non-encrypting recipient keys are refused. An empty
+  message is refused.
+- `--signer-private` and `--signer-passphrase-file` sign inside the encrypted
+  message. `decrypt --verify-key bob-public.asc` requires a valid signature
+  from that key.
+- `--binary` writes binary output instead of ASCII armor.
+- Encryption is authenticated and uncompressed. Output files are atomic, mode
+  `0600`, and refuse replacement without `--force`.
 
-Encryption is authenticated and uncompressed. Signing is optional and verifies
-the plaintext inside the encrypted message. Output files are atomic, mode
-`0600`, and refuse replacement without `--force`.
+<!-- DRAFT: a full cohort is 100 members (main f2f.ts COHORT_SIZE) and the
+escrow key is extra, while the client limit is 100 keys (crypto.go
+maxRecipientKeys). A full escrow-enabled cohort keyring may fail to encrypt.
+Verify with a synthetic test before publishing. -->
 
 ## Verify fingerprints
 
@@ -71,11 +130,16 @@ same armored files if you prefer to compare fingerprints there.
 
 ## Non-goals
 
-- No private-key escrow or server-side key handling.
+- No escrow or upload of members' own private keys.
+- No recovery of escrowed messages by this tool.
+- No message relay or storage. Send the encrypted file over any channel.
 - No global identity verification or trust-on-first-use for cohort members.
 - No protection against a compromised endpoint or a malicious binary.
 
 ## Canonical sources
 
 - `tools/hrt-f2f/README.md`
+- `tools/hrt-f2f/main.go`, `tools/hrt-f2f/crypto.go`
 - `docs/hrt-protocol/DEV_GUIDE.md` (F2F service section)
+- Main repo [`docs/hrt-protocol/F2F_SERVICE.md`](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker/blob/main/docs/hrt-protocol/F2F_SERVICE.md)
+  (server side, cohorts, escrow provisioning)
