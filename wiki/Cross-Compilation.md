@@ -40,15 +40,26 @@ Gentoo cross packages:
 ```sh
 CURL_FLAGS='static-libs -quic -http3 -alt-svc -httpsrr -ech -http2 -idn -psl -adns -zstd -brotli'
 
-echo 'cross-x86_64-w64-mingw32/dev-libs/openssl static-libs -quic' | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
-echo "cross-x86_64-w64-mingw32/net-misc/curl $CURL_FLAGS" | sudo tee -a /etc/portage/package.use/cross-x86_64-w64-mingw32
-sudo x86_64-w64-mingw32-emerge -1av dev-libs/openssl net-misc/curl
+# Remove any invalid cross-*/dev-libs/openssl atoms from the host package.use.
+sudo sed -i '/dev-libs\/openssl\|net-misc\/curl/d' \
+  /etc/portage/package.use/cross-x86_64-w64-mingw32 \
+  /etc/portage/package.use/cross-i686-w64-mingw32
 
-sudo crossdev -t i686-w64-mingw32
-echo 'cross-i686-w64-mingw32/dev-libs/openssl static-libs -quic' | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
-echo "cross-i686-w64-mingw32/net-misc/curl $CURL_FLAGS" | sudo tee -a /etc/portage/package.use/cross-i686-w64-mingw32
+# USE flags for the cross packages live in the cross config root, not the host.
+for root in /usr/x86_64-w64-mingw32 /usr/i686-w64-mingw32; do
+  sudo mkdir -p "$root/etc/portage/package.use"
+  printf 'dev-libs/openssl static-libs -quic\nnet-misc/curl %s\n' "$CURL_FLAGS" |
+    sudo tee "$root/etc/portage/package.use/openssl-curl"
+done
+
+sudo x86_64-w64-mingw32-emerge -1av dev-libs/openssl net-misc/curl
 sudo i686-w64-mingw32-emerge -1av dev-libs/openssl net-misc/curl
 ```
+
+Do **not** run `crossdev -t i686-w64-mingw32` on this host: the installed
+`dev-util/mingw64-toolchain` already provides the i686 wrapper and is required
+by Wine, and a crossdev binutils install soft-blocks it. The existing
+`i686-w64-mingw32-emerge` works with the cross root created by crossdev.
 
 With these flags the cross curl depends only on zlib and OpenSSL, not on
 nghttp2/nghttp3/ICU/GnuTLS.
