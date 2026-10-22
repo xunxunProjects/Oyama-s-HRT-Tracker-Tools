@@ -238,6 +238,16 @@ state.
 `add-link --force` replaces a link with the same name. `link remove NAME` asks
 for confirmation unless `--yes` is given.
 
+On a real terminal the console opens with an ASCII `HRT` banner: a cyan
+wordmark, a bold version line, and a faint product line. Below 52 columns it
+shrinks to two lines. Pipes, files, and `--json` get the one-line welcome
+instead. Colour uses the terminal's own ANSI palette; `NO_COLOR` (any non-empty
+value) removes colour, `--no-color` removes all escape sequences, and an unset
+`TERM` or `TERM=dumb` gets plain text. `TERM=linux` keeps colour but drops faint
+text. A custom `welcome` string replaces the banner
+(`hrt-tool config set welcome TEXT`; `hrt-tool config unset welcome` restores
+it).
+
 ## status
 
 ```sh

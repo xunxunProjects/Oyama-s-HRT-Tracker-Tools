@@ -18,11 +18,8 @@ real health data, private keys, passphrases, tokens, vaults, or production
 backups. Do not send that material in a private report either.
 
 Preferred: use GitHub's private vulnerability reporting for this repository
-(**Security → Report a vulnerability**).
-
-<!-- DRAFT (Phase 1): private vulnerability reporting is DISABLED on this
-repository (GitHub API, checked 2026-10-22). Enable it before merging this
-text. -->
+(**Security → Report a vulnerability**, or the
+[advisory form](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/security/advisories/new)).
 
 If private reporting is not available, open a minimal public issue asking the
 maintainers for a private channel. Do not include the vulnerability details or
@@ -52,9 +49,6 @@ The [Reporting Vulnerabilities](https://github.com/xunxunProjects/Oyama-s-HRT-Tr
 wiki page is a longer guide with safe-testing advice.
 
 ## What to expect
-
-<!-- DRAFT (Phase 1): proposed commitments, copied from the tracker
-repository's SECURITY.md. Maintainers must confirm them before merging. -->
 
 - We aim to acknowledge a report within 7 days.
 - Confirmed problems are fixed with a regression test in a new release. A

@@ -58,6 +58,14 @@ Do not edit the wiki UI directly; changes made there are overwritten on the
 next publish. The first wiki page must be created once in the web UI before
 the git repository exists.
 
+## Community
+
+Participation follows [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). Report
+conduct issues privately through the repository's
+[advisory form](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/security/advisories/new)
+with a title starting with `Conduct:`; security reports follow
+[`SECURITY.md`](SECURITY.md).
+
 ## Pull requests
 
 Include:

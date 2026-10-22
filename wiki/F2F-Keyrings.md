@@ -93,13 +93,6 @@ To encrypt for members only, build the recipient file from the members' own
 public key files, for example with `keyring merge`, and compare its
 fingerprints with `keyring list` and `status` first.
 
-<!-- DRAFT (Phase 1, static read only): the keyring export behaviour comes from
-main repo f2f.ts cohortKeyring (appends the escrow key) and tools/hrt-f2f
-crypto.go encryptF2F (uses every recipient key). tools/hrt-f2f/README.md calls
-the pulled keyring "member-only" and says to add escrow explicitly. Confirm on
-an isolated test instance before publishing this page, and decide whether the
-client should filter or ask before encrypting to an escrow key. -->
-
 ## Encrypt and decrypt
 
 ```sh
@@ -113,7 +106,9 @@ hrt-tool f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
 - `--recipient` is repeatable and takes a public key or a keyring file. One
   encryption accepts at most 100 keys and 1 MiB of armored key data. Both
   limits are counted across all recipient files and the `--escrow` file
-  together, before duplicate keys are removed.
+  together, before duplicate keys are removed. A full 100-member cohort keyring
+  plus a separate escrow key can exceed the key limit; trim the recipient set
+  before encrypting.
 - Expired, revoked, and non-encrypting recipient keys are refused, and one such
   key blocks the whole encryption. An empty message is refused.
 - `--signer-private` and `--signer-passphrase-file` sign inside the encrypted
@@ -123,11 +118,6 @@ hrt-tool f2f decrypt --private alice-private.asc --passphrase-file f2f.pass \
 - `--binary` writes binary output instead of ASCII armor.
 - Encryption is authenticated and uncompressed. Output files are atomic, mode
   `0600`, and refuse replacement without `--force`.
-
-<!-- DRAFT: a full cohort is 100 members (main f2f.ts COHORT_SIZE) and the
-escrow key is extra, while the client limit is 100 keys (crypto.go
-maxRecipientKeys). A full escrow-enabled cohort keyring may fail to encrypt.
-Verify with a synthetic test before publishing. -->
 
 ## Verify fingerprints
 

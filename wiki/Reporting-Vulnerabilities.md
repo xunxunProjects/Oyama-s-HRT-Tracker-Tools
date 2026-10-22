@@ -27,13 +27,6 @@ If **Report a vulnerability** is not shown on this repository, open a minimal
 public issue that asks the maintainers for a private channel. Put no details
 of the problem in that issue.
 
-<!-- DRAFT (Phase 1): private vulnerability reporting is currently DISABLED on
-this repository (GitHub API `private-vulnerability-reporting`, checked
-2026-10-22), so the button in the first row does not appear yet. Enable
-"Private vulnerability reporting" in the repository's security settings before
-publishing this page, or point the first row at the channel the maintainers
-choose. -->
-
 ## What is in scope
 
 - `hrt-tool`: the encrypted vault and its file permissions, server trust and
@@ -116,6 +109,7 @@ password.
 
 ## What happens next
 
+- We aim to acknowledge a report within 7 days.
 - A private report is visible only to you, the maintainers, and anyone they add
   to the advisory.
 - Confirmed problems are fixed with a regression test and released. A GitHub
@@ -123,13 +117,8 @@ password.
   prefer to stay anonymous.
 - `0.1.x` is an experimental pre-release line: fixes are best effort, and only
   the latest release is fixed.
+- Reports can be written in English or Chinese.
 - There is no bug bounty.
-
-<!-- DRAFT (Phase 1): this section mirrors the tracker repository's policy,
-which also promises an acknowledgement within 7 days and accepts reports in
-English or Chinese. This repository's SECURITY.md states no timeline or
-languages yet. Maintainers should confirm these points, and add them to
-SECURITY.md, before this page is published. -->
 
 ## Canonical sources
 

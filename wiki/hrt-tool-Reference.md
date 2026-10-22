@@ -46,18 +46,12 @@ see [F2F Keyrings](F2F-Keyrings).
 | `--mode transfem\|transmasc` | Data mode. Without it, live commands and the console use the mode saved with `config set mode`; otherwise the mode declared in the snapshot is used. A command that needs a mode and finds none fails with `MODE_REQUIRED`. |
 | `--utc` | Read `--time` values without an offset as UTC, and print times in UTC. |
 
-<!-- DRAFT (Phase 1, read from the source, not run): `--token-file` is parsed
-in tools/hrt-tool/src/cli.cpp:103-104, but nothing reads `options.token_file`.
-tools/hrt-tool/README.md:386 and tools/hrt-tool/src/completion.cpp:13 still
-list it as a global flag. Maintainers should either drop it from those places
-or implement it, then revise the row above. -->
-
 ### Output and diagnostics
 
 | Flag | Meaning |
 | --- | --- |
 | `--json` | JSON on standard output for commands that support it, such as `status`, `look`, `doctor`, and `version`. Trust prompts and warnings stay on standard error. |
-| `--no-color` | Today this only affects the interactive console: its `clear` command sends the ANSI clear-screen sequence only on a terminal and only without `--no-color`. No other output is coloured. |
+| `--no-color` | Plain mode: no ANSI escape sequences anywhere, including the console's `clear`. The console welcome banner is still drawn, in plain ASCII. `NO_COLOR` is the environment-variable equivalent for colour only. |
 | `--no-humor` | Suppress only the human failure line. |
 | `--debug`, `--trace` | For `https://` and `http://` servers: libcurl connection and header lines on standard error, with the values of `Authorization`, `Proxy-Authorization`, `Cookie`, and `Set-Cookie` replaced by `<redacted>`. Request and response bodies are never printed. `--debug` also prints one `METHOD URL -> STATUS` line and the server's SPKI SHA-256 for each request. `hrt://` connections print no transport diagnostics. Both flags disable retries and suppress the human failure line. |
 | `--log-file FILE` | Record diagnostics in an encrypted log file. Read it with `hrt-tool logs show --log-file FILE`. Without this flag nothing is logged to disk. |
