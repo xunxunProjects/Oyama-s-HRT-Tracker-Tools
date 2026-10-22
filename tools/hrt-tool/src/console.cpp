@@ -1,12 +1,15 @@
 #include "console.h"
 
+#include "banner.h"
 #include "cli.h"
 #include "i18n.h"
 #include "link.h"
 #include "net_error.h"
 #include "paths.h"
 #include "session.h"
+#include "term.h"
 #include "vault.h"
+#include "version.h"
 
 #include <cctype>
 #include <cstdio>
@@ -14,24 +17,7 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace {
-
-bool stream_is_tty(std::ostream &out) {
-    if (&out != &std::cout) {
-        return false;
-    }
-#ifdef _WIN32
-    return _isatty(_fileno(stdout)) != 0;
-#else
-    return ::isatty(STDOUT_FILENO) != 0;
-#endif
-}
 
 void save_context(const GlobalOptions &options, SessionContext &context) {
     const Paths paths = resolve_paths(options.config_dir);
@@ -146,10 +132,9 @@ int run_console(const GlobalOptions &options, std::istream &in, std::ostream &ou
     } catch (const ToolError &) {
         language = Language::En;
     }
-    const std::string welcome = context.session.data.welcome.empty()
-                                    ? tr(language, I18nKey::Welcome)
-                                    : context.session.data.welcome;
-    out << welcome << "\n";
+    const TermCaps caps = term_caps_for(out, session_options.no_color);
+    out << console_welcome(caps, options.json, context.session.data.welcome,
+                           tr(language, I18nKey::Welcome), current_version_string());
     out.flush();
 
     std::string current = context.session.data.active_link;
@@ -195,7 +180,7 @@ int run_console(const GlobalOptions &options, std::istream &in, std::ostream &ou
             continue;
         }
         if (command == "clear") {
-            if (stream_is_tty(out) && !session_options.no_color) {
+            if (caps.ansi) {
                 out << "\x1b[2J\x1b[H";
             }
             continue;

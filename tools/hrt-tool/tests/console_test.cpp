@@ -33,6 +33,7 @@ int main() {
         "add-link hrt://127.0.0.1:9443 mtf\n"
         "commit-server mtf\n"
         "version\n"
+        "clear\n"
         "exit\n"
         "exit\n");
     std::ostringstream out;
@@ -42,6 +43,13 @@ int main() {
     CHECK(out.str().find("hrt$mtf>") != std::string::npos);
     CHECK(out.str().find("hrt-tool") != std::string::npos);
     CHECK(err.str().find("error") == std::string::npos);
+
+    /* String streams are never terminals: one plain welcome line, no escape sequences,
+       and `clear` prints nothing. */
+    CHECK(out.str().find("hrt-tool console. Type 'help' for commands, 'exit' to quit.\n") !=
+          std::string::npos);
+    CHECK(out.str().find('\x1b') == std::string::npos);
+    CHECK(err.str().find('\x1b') == std::string::npos);
 
     std::filesystem::remove_all(dir);
     return test_result();
