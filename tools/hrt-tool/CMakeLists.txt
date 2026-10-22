@@ -197,6 +197,7 @@ add_library(hrtcpp STATIC
     src/session.cpp
     src/snapshot.cpp
     src/status.cpp
+    src/term.cpp
     src/trust.cpp
     src/vault.cpp
     src/version.cpp
@@ -315,6 +316,10 @@ if(BUILD_TESTING)
     add_executable(status_test tests/status_test.cpp)
     target_link_libraries(status_test PRIVATE hrtcpp)
     add_test(NAME status COMMAND status_test)
+
+    add_executable(term_test tests/term_test.cpp)
+    target_link_libraries(term_test PRIVATE hrtcpp)
+    add_test(NAME term COMMAND term_test)
 
     add_executable(add_interactive_test tests/add_interactive_test.cpp)
     target_link_libraries(add_interactive_test PRIVATE hrtcpp)
