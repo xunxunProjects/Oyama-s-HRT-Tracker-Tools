@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <iosfwd>
 #include <map>
 #include <string>
 
@@ -22,6 +23,13 @@ struct TermEnv {
 };
 
 TermCaps term_caps(const TermEnv &env);
+
+// Only std::cout (fd 1) and std::cerr (fd 2) can be terminals; any other stream is not.
+TermEnv term_env_for(const std::ostream &out, bool no_color_flag);
+TermCaps term_caps_for(const std::ostream &out, bool no_color_flag);
+
+// Windows: enable VT processing and UTF-8 output on real consoles. Elsewhere: no-op.
+void term_platform_init();
 
 enum class Role { Plain, Title, Accent, Muted, Ok, Warn, Error };
 

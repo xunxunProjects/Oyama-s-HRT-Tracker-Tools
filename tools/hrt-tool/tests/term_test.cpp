@@ -2,7 +2,9 @@
 #include "test_framework.h"
 
 #include <cstddef>
+#include <cstdlib>
 #include <map>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -159,11 +161,54 @@ static void test_width() {
     CHECK_EQ(utf8_width(std::string("\x7f")), std::size_t{0});
 }
 
+#ifndef _WIN32
+// std::cout is deliberately not asserted on: it is a TTY when the test is run by hand.
+static void test_process_adapter() {
+    setenv("COLUMNS", "100", 1);
+    setenv("TERM", "xterm", 1);
+    unsetenv("NO_COLOR");
+    unsetenv("LC_ALL");
+    {
+        std::ostringstream sink;
+        CHECK_EQ(term_env_for(sink, false).is_tty, false);
+        const TermCaps caps = term_caps_for(sink, false);
+        CHECK_EQ(caps.tty, false);
+        CHECK_EQ(caps.ansi, false);
+        CHECK_EQ(caps.color, false);
+        CHECK_EQ(caps.columns, 100);
+    }
+    {
+        std::ostringstream sink;
+        CHECK_EQ(term_env_for(sink, true).no_color_flag, true);
+        CHECK_EQ(term_env_for(sink, false).no_color_flag, false);
+    }
+    {
+        std::ostringstream sink;
+        const TermEnv env = term_env_for(sink, false);
+        CHECK_EQ(env.vars.count("NO_COLOR"), std::size_t{0});
+        CHECK_EQ(env.vars.count("LC_ALL"), std::size_t{0});
+        CHECK_EQ(env.vars.at("TERM"), std::string("xterm"));
+        CHECK_EQ(env.vars.at("COLUMNS"), std::string("100"));
+    }
+    setenv("NO_COLOR", "1", 1);
+    {
+        std::ostringstream sink;
+        const TermEnv env = term_env_for(sink, false);
+        CHECK_EQ(env.vars.count("NO_COLOR"), std::size_t{1});
+        CHECK_EQ(env.vars.at("NO_COLOR"), std::string("1"));
+    }
+    unsetenv("NO_COLOR");
+}
+#endif
+
 int main() {
     test_ansi_color();
     test_columns();
     test_unicode();
     test_style();
     test_width();
+#ifndef _WIN32
+    test_process_adapter();
+#endif
     return test_result();
 }

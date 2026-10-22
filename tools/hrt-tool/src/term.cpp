@@ -1,7 +1,19 @@
 #include "term.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <initializer_list>
+#include <iostream>
+
+#ifdef _WIN32
+#include <windows.h>
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#else
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -176,3 +188,93 @@ std::size_t utf8_width(const std::string &text) {
     }
     return width;
 }
+
+TermEnv term_env_for(const std::ostream &out, bool no_color_flag) {
+    TermEnv env;
+    env.no_color_flag = no_color_flag;
+    for (const char *name : {"NO_COLOR", "TERM", "COLUMNS", "LC_ALL", "LC_CTYPE", "LANG"}) {
+        if (const char *value = std::getenv(name)) {
+            env.vars[name] = value;
+        }
+    }
+
+    int fd = -1;
+    if (&out == &std::cout) {
+        fd = 1;
+    } else if (&out == &std::cerr) {
+        fd = 2;
+    }
+    if (fd < 0) {
+        return env;
+    }
+
+#ifdef _WIN32
+    const HANDLE handle = GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    DWORD mode = 0;
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE &&
+        GetConsoleMode(handle, &mode) != 0) {
+        env.is_tty = true;
+        env.vt_ready = (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(handle, &info) != 0) {
+            const int width = info.srWindow.Right - info.srWindow.Left + 1;
+            if (width > 0) {
+                env.columns_hint = width;
+            }
+        }
+        if (env.vt_ready && env.vars.count("TERM") == 0) {
+            env.vars["TERM"] = "xterm";
+        }
+    }
+#else
+    if (::isatty(fd) != 0) {
+        env.is_tty = true;
+        struct winsize size {};
+        if (::ioctl(fd, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
+            env.columns_hint = size.ws_col;
+        }
+    }
+#endif
+    return env;
+}
+
+TermCaps term_caps_for(const std::ostream &out, bool no_color_flag) {
+    return term_caps(term_env_for(out, no_color_flag));
+}
+
+#ifdef _WIN32
+namespace {
+
+UINT g_saved_output_cp = 0;
+
+void restore_output_cp() {
+    if (g_saved_output_cp != 0) {
+        SetConsoleOutputCP(g_saved_output_cp);
+    }
+}
+
+} // namespace
+
+void term_platform_init() {
+    bool any_console = false;
+    for (DWORD id : {STD_OUTPUT_HANDLE, STD_ERROR_HANDLE}) {
+        const HANDLE handle = GetStdHandle(id);
+        DWORD mode = 0;
+        if (handle == nullptr || handle == INVALID_HANDLE_VALUE ||
+            GetConsoleMode(handle, &mode) == 0) {
+            continue;
+        }
+        any_console = true;
+        SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+    if (any_console) {
+        const UINT previous = GetConsoleOutputCP();
+        if (previous != CP_UTF8 && SetConsoleOutputCP(CP_UTF8) != 0) {
+            g_saved_output_cp = previous;
+            std::atexit(restore_output_cp);
+        }
+    }
+}
+#else
+void term_platform_init() {}
+#endif
