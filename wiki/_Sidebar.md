@@ -8,6 +8,7 @@
 **Using the tools**
 
 - [Using hrt-tool](Using-hrt-tool)
+- [hrt-tool Reference](hrt-tool-Reference)
 - [Using hrt-cold](Using-hrt-cold)
 - [F2F Keyrings](F2F-Keyrings)
 - [Troubleshooting](Troubleshooting)
@@ -16,6 +17,7 @@
 
 - [Security Model](Security-Model)
 - [Privacy Environments](Privacy-Environments)
+- [Reporting Vulnerabilities](Reporting-Vulnerabilities)
 
 **Development**
 
