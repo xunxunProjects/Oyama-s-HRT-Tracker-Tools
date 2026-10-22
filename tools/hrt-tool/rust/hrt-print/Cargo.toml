@@ -1,6 +1,6 @@
 [package]
 name = "hrtprint"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [lib]
@@ -9,3 +9,8 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 serde_json = "1"
+
+# The printer has no recovery path, and the 32-bit MinGW toolchain in the
+# release environment ships no unwinder library.
+[profile.release]
+panic = "abort"

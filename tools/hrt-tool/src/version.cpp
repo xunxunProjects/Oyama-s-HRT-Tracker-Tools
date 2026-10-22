@@ -8,14 +8,32 @@
 
 #include <sstream>
 
+#ifndef HRT_TOOL_VERSION_MAJOR
+#define HRT_TOOL_VERSION_MAJOR 0
+#endif
+#ifndef HRT_TOOL_VERSION_MINOR
+#define HRT_TOOL_VERSION_MINOR 1
+#endif
+#ifndef HRT_TOOL_VERSION_PATCH
+#define HRT_TOOL_VERSION_PATCH 1
+#endif
+
 ToolVersion current_version() {
-    return ToolVersion{0, 1, 0};
+    return ToolVersion{HRT_TOOL_VERSION_MAJOR, HRT_TOOL_VERSION_MINOR,
+                       HRT_TOOL_VERSION_PATCH};
 }
 
-std::string format_version_line() {
+std::string current_version_string() {
     const ToolVersion version = current_version();
+    return std::to_string(version.major) + "." + std::to_string(version.minor) +
+           "." + std::to_string(version.patch);
+}
+
+std::string format_user_agent() { return "hrt-tool/" + current_version_string(); }
+
+std::string format_version_line() {
     std::ostringstream out;
-    out << "hrt-tool " << version.major << '.' << version.minor << '.' << version.patch << '\n';
+    out << "hrt-tool " << current_version_string() << '\n';
     out << "hrtcore " << hrtcore_version() << " (ABI " << hrtcore_abi_version() << ")\n";
     out << "hrtprint " << hrtprint_version() << '\n';
     out << "f2f " << f2f_version() << '\n';
@@ -23,12 +41,8 @@ std::string format_version_line() {
 }
 
 std::string format_version_json() {
-    const ToolVersion version = current_version();
-    const std::string tool = std::to_string(version.major) + "." +
-                             std::to_string(version.minor) + "." +
-                             std::to_string(version.patch);
     return nlohmann::json{
-        {"tool", tool},
+        {"tool", current_version_string()},
         {"core", hrtcore_version()},
         {"print", hrtprint_version()},
         {"f2f", f2f_version()},

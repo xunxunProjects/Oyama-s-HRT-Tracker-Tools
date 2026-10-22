@@ -2,6 +2,7 @@
 
 #include "error.h"
 #include "net_error.h"
+#include "version.h"
 
 #include <algorithm>
 #include <cctype>
@@ -640,9 +641,10 @@ HttpResponse HttpClient::request(const std::string &method, const std::string &u
     }
 
     CURL *curl = cleanup.curl;
+    const std::string user_agent = format_user_agent();
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "hrt-tool/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, user_agent.c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, options.timeout_s);
     // Never follow a redirect automatically: a 307/308 would re-send the
     // login body (the account password) to whatever host the response names.

@@ -1,5 +1,10 @@
 # hrt-tool
 
+> The user-facing documentation home is the
+> [GitHub wiki](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki).
+> This file is the canonical source-tree reference for commands, build
+> options, and internal limits.
+
 `hrt-tool` is the terminal client of the independent Oyama HRT Tracker Tools
 project. It is a separate codebase from [`hrt-cold`](../hrt-cold/README.md):
 different language, build, CI job, and release artifact.

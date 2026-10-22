@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
-static VERSION: &[u8] = b"0.1.0\0";
+static VERSION: &[u8] = concat!(env!("HRTPRINT_VERSION"), "\0").as_bytes();
 
 const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;

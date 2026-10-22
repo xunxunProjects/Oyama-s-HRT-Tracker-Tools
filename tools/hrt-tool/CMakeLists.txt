@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-project(hrt_tool VERSION 0.1.0 LANGUAGES C CXX)
+set(HRT_TOOL_VERSION "0.1.1" CACHE STRING "hrt-tool release version")
+set(HRT_RUST_TARGET "" CACHE STRING "Rust target triple (empty = host)")
+set(HRT_GOOS "" CACHE STRING "Go GOOS (empty = host)")
+set(HRT_GOARCH "" CACHE STRING "Go GOARCH (empty = host)")
+set(HRT_GO_CC "" CACHE STRING "C compiler for cgo (empty = host default)")
+set(HRT_GO_CXX "" CACHE STRING "C++ compiler for cgo (empty = host default)")
+set(HRT_GO_CGO_CFLAGS "" CACHE STRING "cgo CFLAGS (empty = none)")
+set(HRT_GO_CGO_LDFLAGS "" CACHE STRING "cgo LDFLAGS (empty = none)")
+project(hrt_tool VERSION ${HRT_TOOL_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -19,6 +27,35 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
+
+# On Windows, link the static libcurl path directly. FindCURL prefers the
+# import library (libcurl.dll.a), which would make the release depend on a
+# DLL that is not shipped.
+if(WIN32 AND CURL_LIBRARY)
+    set(HRT_CURL_TARGET "${CURL_LIBRARY}")
+    set(HRT_CURL_INCLUDE "${CURL_INCLUDE_DIR}")
+    set(HRT_CURL_STATIC TRUE)
+else()
+    set(HRT_CURL_TARGET CURL::libcurl)
+    set(HRT_CURL_INCLUDE "")
+endif()
+
+# nlohmann/json is header-only. Cross builds must not add the host
+# /usr/include to the search path: doing so lets the target's libstdc++
+# __has_include pick up host glibc headers. Stage only the nlohmann tree.
+if(CMAKE_CROSSCOMPILING)
+    get_target_property(HRT_NLOHMANN_INCLUDE nlohmann_json::nlohmann_json
+        INTERFACE_INCLUDE_DIRECTORIES)
+    list(GET HRT_NLOHMANN_INCLUDE 0 HRT_NLOHMANN_INCLUDE_DIR)
+    set(HRT_HOST_INCLUDE ${CMAKE_BINARY_DIR}/host-include)
+    file(MAKE_DIRECTORY ${HRT_HOST_INCLUDE}/nlohmann)
+    file(COPY ${HRT_NLOHMANN_INCLUDE_DIR}/nlohmann/
+         DESTINATION ${HRT_HOST_INCLUDE}/nlohmann)
+    set(HRT_NLOHMANN_TARGET "")
+else()
+    set(HRT_HOST_INCLUDE "")
+    set(HRT_NLOHMANN_TARGET nlohmann_json::nlohmann_json)
+endif()
 
 function(hrt_tool_warnings target)
     if(NOT HRT_TOOL_ENABLE_WARNINGS)
@@ -52,15 +89,25 @@ add_library(hrtcore STATIC
     native/core/pk.c
 )
 target_include_directories(hrtcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(hrtcore PRIVATE
+    HRT_CORE_VERSION_STRING="${PROJECT_VERSION}")
 target_link_libraries(hrtcore PUBLIC OpenSSL::Crypto)
 
 set(HRTPRINT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rust/hrt-print)
-set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/release/libhrtprint.a)
+if(HRT_RUST_TARGET)
+    set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/${HRT_RUST_TARGET}/release/libhrtprint.a)
+    set(HRTPRINT_TARGET_ARG --target ${HRT_RUST_TARGET})
+else()
+    set(HRTPRINT_LIB ${HRTPRINT_DIR}/target/release/libhrtprint.a)
+    set(HRTPRINT_TARGET_ARG "")
+endif()
 add_custom_command(
     OUTPUT ${HRTPRINT_LIB}
-    COMMAND ${CARGO_EXECUTABLE} build --release --offline
+    COMMAND ${CMAKE_COMMAND} -E env HRTPRINT_VERSION=${PROJECT_VERSION}
+            ${CARGO_EXECUTABLE} build --release --offline ${HRTPRINT_TARGET_ARG}
             --manifest-path ${HRTPRINT_DIR}/Cargo.toml
-    DEPENDS ${HRTPRINT_DIR}/Cargo.toml ${HRTPRINT_DIR}/src/lib.rs
+    DEPENDS ${HRTPRINT_DIR}/Cargo.toml ${HRTPRINT_DIR}/Cargo.lock
+            ${HRTPRINT_DIR}/build.rs ${HRTPRINT_DIR}/src/lib.rs
     WORKING_DIRECTORY ${HRTPRINT_DIR}
     COMMENT "Building Rust hrtprint"
     VERBATIM
@@ -71,18 +118,31 @@ set(HRT_F2F_SOURCES src/f2f_bridge_stub.cpp)
 set(HRTF2F_INCLUDE_DIR "")
 set(HRTF2F_LINK_LIB "")
 set(HRTF2F_DEPENDENCY "")
+set(HRT_F2F_ENABLED_VALUE 0)
 if(HRT_TOOL_ENABLE_F2F)
+    set(HRT_F2F_ENABLED_VALUE 1)
     find_program(GO_EXECUTABLE go REQUIRED)
     set(HRTF2F_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../hrt-f2f)
     set(HRTF2F_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/hrtf2f)
     set(HRTF2F_LIB ${HRTF2F_BUILD_DIR}/libhrtf2f.a)
     set(HRTF2F_HEADER ${HRTF2F_BUILD_DIR}/libhrtf2f.h)
     file(GLOB HRTF2F_GO_SOURCES CONFIGURE_DEPENDS ${HRTF2F_DIR}/*.go)
+    set(HRTF2F_ENV CGO_ENABLED=1)
+    foreach(pair "GOOS;HRT_GOOS" "GOARCH;HRT_GOARCH" "CC;HRT_GO_CC"
+                 "CXX;HRT_GO_CXX" "CGO_CFLAGS;HRT_GO_CGO_CFLAGS"
+                 "CGO_LDFLAGS;HRT_GO_CGO_LDFLAGS")
+        list(GET pair 0 env_name)
+        list(GET pair 1 var_name)
+        if(${var_name})
+            list(APPEND HRTF2F_ENV "${env_name}=${${var_name}}")
+        endif()
+    endforeach()
     add_custom_command(
         OUTPUT ${HRTF2F_LIB} ${HRTF2F_HEADER}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${HRTF2F_BUILD_DIR}
-        COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
+        COMMAND ${CMAKE_COMMAND} -E env ${HRTF2F_ENV}
                 ${GO_EXECUTABLE} build -buildmode=c-archive -trimpath
+                -ldflags "-X main.buildVersion=${PROJECT_VERSION}"
                 -o ${HRTF2F_LIB} .
         DEPENDS ${HRTF2F_GO_SOURCES} ${HRTF2F_DIR}/go.mod ${HRTF2F_DIR}/go.sum
         WORKING_DIRECTORY ${HRTF2F_DIR}
@@ -96,6 +156,11 @@ if(HRT_TOOL_ENABLE_F2F)
     set(HRTF2F_INCLUDE_DIR ${HRTF2F_BUILD_DIR})
     set(HRTF2F_LINK_LIB ${HRTF2F_LIB})
     set(HRTF2F_DEPENDENCY hrtf2f_build)
+endif()
+
+set(HRT_PLATFORM_SOURCES "")
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    list(APPEND HRT_PLATFORM_SOURCES src/mingw32_unwind_stub.c)
 endif()
 
 add_library(hrtcpp STATIC
@@ -139,13 +204,26 @@ add_library(hrtcpp STATIC
 target_include_directories(hrtcpp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${HRTF2F_INCLUDE_DIR}
+    ${HRT_CURL_INCLUDE}
 )
+if(HRT_HOST_INCLUDE)
+    target_include_directories(hrtcpp PRIVATE ${HRT_HOST_INCLUDE})
+endif()
+target_compile_definitions(hrtcpp PUBLIC
+    HRT_TOOL_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    HRT_TOOL_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    HRT_TOOL_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    HRT_TOOL_F2F_ENABLED=${HRT_F2F_ENABLED_VALUE}
+)
+if(HRT_CURL_STATIC)
+    target_compile_definitions(hrtcpp PUBLIC CURL_STATICLIB)
+endif()
 target_link_libraries(hrtcpp PUBLIC
     hrtcore
-    nlohmann_json::nlohmann_json
+    ${HRT_NLOHMANN_TARGET}
     ${HRTPRINT_LIB}
     ${HRTF2F_LINK_LIB}
-    CURL::libcurl
+    ${HRT_CURL_TARGET}
     OpenSSL::SSL
     OpenSSL::Crypto
 )
@@ -157,13 +235,22 @@ hrt_tool_warnings(hrtcore)
 hrt_tool_warnings(hrtcpp)
 
 add_executable(hrt-tool src/main.cpp)
+target_sources(hrt-tool PRIVATE ${HRT_PLATFORM_SOURCES})
 target_link_libraries(hrt-tool PRIVATE
     hrtcpp
-    CURL::libcurl
+    ${HRT_CURL_TARGET}
     Threads::Threads
-    ${CMAKE_DL_LIBS}
-    m
 )
+if(WIN32)
+    # Repeat the static archives and system libraries at the end: GNU ld
+    # resolves them in order, and the Go/Rust archives are pulled in through
+    # hrtcpp's interface.
+    target_link_libraries(hrt-tool PRIVATE
+        hrtcore ${HRTPRINT_LIB} ${HRTF2F_LINK_LIB}
+        ws2_32 crypt32 bcrypt advapi32 iphlpapi ntdll userenv winmm z)
+else()
+    target_link_libraries(hrt-tool PRIVATE ${CMAKE_DL_LIBS} m)
+endif()
 add_dependencies(hrt-tool hrtprint_build)
 hrt_tool_warnings(hrt-tool)
 

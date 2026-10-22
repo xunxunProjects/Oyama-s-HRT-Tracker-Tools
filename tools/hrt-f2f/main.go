@@ -20,7 +20,7 @@ const (
 	maxCodeBytes       = 1024
 )
 
-var buildVersion = "0.1.0"
+var buildVersion = "0.1.1"
 
 var errHelp = errors.New("help requested")
 

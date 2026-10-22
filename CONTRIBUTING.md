@@ -45,6 +45,19 @@ Linux CI also runs a sanitizer build. The native core is docs-first; do not add
 a crypto backend without updating [`docs/native/CRYPTO.md`](docs/native/CRYPTO.md)
 and recording licence/notices changes.
 
+## Wiki
+
+The GitHub wiki is generated from the `wiki/` directory in this repository.
+Edit the pages here and publish them with:
+
+```sh
+scripts/publish-wiki.sh
+```
+
+Do not edit the wiki UI directly; changes made there are overwritten on the
+next publish. The first wiki page must be created once in the web UI before
+the git repository exists.
+
 ## Pull requests
 
 Include:

@@ -161,12 +161,17 @@ skipped when `gpg` is not installed.
 
 ## Release builds
 
+The installed surface is the merged `hrt-tool` binary, not a separate
+`hrt-f2f` executable. Build the merged release with:
+
 ```sh
-tools/hrt-f2f/scripts/build-release.sh 0.1.0 /path/to/output
+tools/hrt-tool/scripts/build-release.sh 0.1.1 /path/to/output
 ```
 
-The script runs the tests, cross-compiles Linux and Windows binaries for
-amd64 and 386 with `CGO_ENABLED=0`, writes `BUILD_INFO.txt`, per-binary
-`SHA512SUMS`/`MD5SUMS`, and a `hrt-f2f-<version>-multiarch.tar.xz` with
-archive-level `.sha512` and `.md5` files. Detached signatures are made by the
-release owner after the build.
+The old `tools/hrt-f2f/scripts/build-release.sh` is a thin wrapper. The Go
+implementation is linked as a `c-archive`, so the release build is host Linux
+only unless cross toolchains are installed; see the
+[Cross Compilation](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/wiki/Cross-Compilation)
+wiki page. The script writes `BUILD_INFO.txt`, per-binary `SHA512SUMS`/
+`MD5SUMS`, a tarball, and archive-level `.sha512`/`.md5` files. Detached
+signatures are made by the release owner after the build.
