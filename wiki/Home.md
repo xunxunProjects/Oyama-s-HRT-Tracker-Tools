@@ -21,16 +21,18 @@ bundle format. It does not handle OpenPGP keys or passphrases.
 
 - [Quick Start](Quick-Start) — install, first vault, console, and a cold-backup round trip.
 - [Build and Install](Build-and-Install) — dependencies and CMake/Make targets.
-- [Using hrt-tool](Using-hrt-tool) — commands, links, status, and diagnostics.
+- [Using hrt-tool](Using-hrt-tool) — servers, trust, login, live and local data, export, links, and diagnostics.
+- [hrt-tool Reference](hrt-tool-Reference) — global flags, configuration keys, time input, and file locations.
 - [Using hrt-cold](Using-hrt-cold) — keygen, encrypt, decrypt, and limits.
 - [Security Model](Security-Model) — what the tools protect and what they do not.
-- [Troubleshooting](Troubleshooting) — exit codes and common failures.
+- [Troubleshooting](Troubleshooting) — exit codes, common errors, and failures.
+- [Reporting Vulnerabilities](Reporting-Vulnerabilities) — where to report and how to test safely.
 
 ## Repository
 
 - Source: <https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools>
 - Releases: <https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/releases>
-- Security reports: [`SECURITY.md`](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/blob/main/SECURITY.md)
+- Security reports: [Reporting Vulnerabilities](Reporting-Vulnerabilities) and [`SECURITY.md`](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/blob/main/SECURITY.md)
 - Contributing: [`CONTRIBUTING.md`](https://github.com/xunxunProjects/Oyama-s-HRT-Tracker-Tools/blob/main/CONTRIBUTING.md)
 
 The pages in this wiki are versioned in the repository under `wiki/` and
