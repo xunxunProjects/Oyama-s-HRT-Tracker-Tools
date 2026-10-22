@@ -392,6 +392,39 @@ Global flags (accepted before or after the command):
 --user-id ID  --account-password-file FILE  --account-password-stdin
 ```
 
+## Colour and terminals
+
+`hrt-tool` decides separately for stdout and stderr whether it is talking to
+a real terminal. Escape sequences and the welcome banner appear only there:
+pipes, files, and `--json` always get plain text. Today the interactive
+console's welcome banner and `clear` are the only output that uses this;
+all other command output is unchanged.
+
+| Condition | Effect |
+|-----------|--------|
+| stdout is not a terminal | no escape sequences; one-line console welcome |
+| `TERM` unset, empty, or `dumb` | no escape sequences (the banner is still drawn, in plain ASCII) |
+| `NO_COLOR` set to any non-empty value, including `0` | no colour; an empty value is ignored |
+| `--no-color` | plain mode: no escape sequences at all, so `clear` does not wipe the screen either |
+| `TERM=linux` (Linux kernel console) | colour, but no faint text |
+| `--json` | no banner |
+
+Colours are the terminal's own basic ANSI colours (cyan accent, bold title,
+faint secondary text), never fixed RGB values, so your theme decides the
+shades. The width comes from the terminal, then `COLUMNS`, then 80; below 52
+columns the banner shrinks to two lines. The banner is plain ASCII.
+
+A custom welcome text replaces the banner and is printed exactly as given,
+also on non-terminals: `hrt-tool config set welcome TEXT`. `hrt-tool config
+unset welcome` brings the banner back.
+
+On Windows, real consoles (cmd.exe, PowerShell, Windows Terminal) are switched
+to virtual-terminal mode and a UTF-8 output code page for the life of the
+process (restored on exit); an unset `TERM` counts as `xterm` there. MSYS2,
+mintty, and Git Bash connect stdout through a pipe, so they count as
+non-terminals and get plain output. This path is compile-checked for both
+MinGW targets but has not been run on a real Windows console yet.
+
 ## Vault format
 
 All integers are big-endian. The header is 48 bytes and is also the AES-GCM

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Terminal output
+
+- Terminal capability layer: real terminals are detected per stream (stdout
+  and stderr), together with `TERM`, `NO_COLOR` (any non-empty value turns
+  colour off), `--no-color`, the terminal width, and a UTF-8 locale. On
+  Windows consoles the tool enables virtual-terminal mode and a UTF-8 output
+  code page.
+- The interactive console draws an ASCII `HRT` welcome banner on a real
+  terminal, with a two-line form below 52 columns. Pipes and `--json` keep
+  the one-line welcome; a custom `welcome` text replaces the banner.
+- `--no-color` used to affect only `clear`; it is now a plain mode that
+  emits no escape sequences at all. `clear` follows the same rules, so it
+  also stays quiet when `TERM` is unset or `dumb`.
+- `--json` and piped output are unchanged.
+
 ## 0.1.1 — 2026-10-21
 
 Documentation and release engineering; no runtime CLI output changes.
