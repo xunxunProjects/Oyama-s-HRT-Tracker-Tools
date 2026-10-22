@@ -167,6 +167,7 @@ add_library(hrtcpp STATIC
     src/add_interactive.cpp
     src/api_live.cpp
     src/backup_envelope.cpp
+    src/banner.cpp
     src/cli.cpp
     src/command_flags.cpp
     src/commands.cpp
@@ -320,6 +321,10 @@ if(BUILD_TESTING)
     add_executable(term_test tests/term_test.cpp)
     target_link_libraries(term_test PRIVATE hrtcpp)
     add_test(NAME term COMMAND term_test)
+
+    add_executable(banner_test tests/banner_test.cpp)
+    target_link_libraries(banner_test PRIVATE hrtcpp)
+    add_test(NAME banner COMMAND banner_test)
 
     add_executable(add_interactive_test tests/add_interactive_test.cpp)
     target_link_libraries(add_interactive_test PRIVATE hrtcpp)
