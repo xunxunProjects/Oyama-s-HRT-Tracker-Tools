@@ -1,15 +1,22 @@
+**Start by role**
+
+- [Who are you?](Home)
+- [I use hrt-tool](Using-hrt-tool)
+- [I need the commands](CLI-Command-Reference)
+- [I use hrt-cold](Using-hrt-cold)
+- [I develop it](Developer-API)
+- [I test security](Security-Researchers)
+- [I am an AI contributor](AI-Contributors)
+
 **Getting started**
 
-- [Home](Home)
 - [Quick Start](Quick-Start)
 - [Build and Install](Build-and-Install)
 - [Downloads and Verification](Downloads-and-Verification)
 
-**Using the tools**
+**Reference**
 
-- [Using hrt-tool](Using-hrt-tool)
 - [hrt-tool Reference](hrt-tool-Reference)
-- [Using hrt-cold](Using-hrt-cold)
 - [F2F Keyrings](F2F-Keyrings)
 - [Troubleshooting](Troubleshooting)
 
